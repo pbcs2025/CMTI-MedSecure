@@ -1,0 +1,1299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>MediScan — Medicine Authenticity Checker</title>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --white:       #ffffff;
+    --bg:          #f5f7fa;
+    --surface:     #ffffff;
+    --border:      #e8ecf2;
+    --border-mid:  #d0d7e3;
+    --text:        #0f1923;
+    --text-mid:    #4a5568;
+    --text-soft:   #8896a8;
+    --blue:        #2563eb;
+    --blue-light:  #eff4ff;
+    --blue-mid:    #bfcffd;
+    --green:       #059669;
+    --green-light: #ecfdf5;
+    --green-mid:   #a7f3d0;
+    --amber:       #d97706;
+    --amber-light: #fffbeb;
+    --amber-mid:   #fde68a;
+    --red:         #dc2626;
+    --red-light:   #fef2f2;
+    --red-mid:     #fecaca;
+    --gray-light:  #f8f9fb;
+    --gray-mid:    #e2e8f0;
+    --radius-sm:   8px;
+    --radius:      12px;
+    --radius-lg:   16px;
+    --radius-xl:   20px;
+    --shadow-sm:   0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+    --shadow:      0 4px 16px rgba(0,0,0,0.07), 0 1px 4px rgba(0,0,0,0.04);
+    --shadow-lg:   0 8px 32px rgba(0,0,0,0.09), 0 2px 8px rgba(0,0,0,0.04);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* ── HEADER ── */
+  .header {
+    background: var(--white);
+    border-bottom: 1px solid var(--border);
+    padding: 0 20px;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    text-decoration: none;
+  }
+
+  .logo-icon {
+    width: 34px;
+    height: 34px;
+    background: var(--blue);
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .logo-icon svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: white;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .logo-name {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.3px;
+  }
+
+  .logo-name span { color: var(--blue); }
+
+  .header-badge {
+    background: var(--blue-light);
+    color: var(--blue);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 99px;
+    border: 1px solid var(--blue-mid);
+    letter-spacing: 0.2px;
+  }
+
+  /* ── PAGES ── */
+  .page {
+    display: none;
+    min-height: calc(100vh - 60px);
+  }
+  .page.active { display: block; }
+
+  /* ══════════════════════════════════════════
+     SCAN PAGE
+  ══════════════════════════════════════════ */
+
+  .scan-page {
+    max-width: 560px;
+    margin: 0 auto;
+    padding: 28px 20px 60px;
+  }
+
+  /* Hero */
+  .scan-hero {
+    text-align: center;
+    margin-bottom: 28px;
+  }
+
+  .scan-hero h1 {
+    font-size: clamp(22px, 5vw, 28px);
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    color: var(--text);
+    line-height: 1.25;
+    margin-bottom: 10px;
+  }
+
+  .scan-hero p {
+    color: var(--text-mid);
+    font-size: 14px;
+    max-width: 340px;
+    margin: 0 auto;
+  }
+
+  /* Trust strip */
+  .trust-strip {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    margin-bottom: 24px;
+    padding: 12px 16px;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    flex-wrap: wrap;
+  }
+
+  .trust-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-mid);
+    font-weight: 500;
+  }
+
+  .trust-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    flex-shrink: 0;
+  }
+
+  /* Upload zone */
+  .upload-zone {
+    background: var(--white);
+    border: 2px dashed var(--border-mid);
+    border-radius: var(--radius-lg);
+    padding: 40px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .upload-zone:hover, .upload-zone.drag-over {
+    border-color: var(--blue);
+    background: var(--blue-light);
+  }
+
+  .upload-zone input[type="file"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+    font-size: 0;
+  }
+
+  .upload-illus {
+    width: 72px;
+    height: 72px;
+    background: var(--gray-light);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    margin: 0 auto 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+  }
+
+  .upload-zone:hover .upload-illus {
+    background: var(--blue-light);
+    border-color: var(--blue-mid);
+  }
+
+  .upload-illus svg {
+    width: 32px;
+    height: 32px;
+    stroke: var(--text-soft);
+    fill: none;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: stroke 0.2s;
+  }
+
+  .upload-zone:hover .upload-illus svg { stroke: var(--blue); }
+
+  .upload-title {
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+
+  .upload-sub {
+    font-size: 13px;
+    color: var(--text-soft);
+  }
+
+  /* Divider */
+  .divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 16px 0;
+    color: var(--text-soft);
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .divider::before, .divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* Camera button */
+  .btn-camera {
+    width: 100%;
+    padding: 14px 20px;
+    background: var(--blue);
+    color: white;
+    border: none;
+    border-radius: var(--radius);
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    transition: background 0.15s, transform 0.1s;
+    letter-spacing: -0.1px;
+  }
+
+  .btn-camera:hover { background: #1d4ed8; }
+  .btn-camera:active { transform: scale(0.99); }
+
+  .btn-camera svg {
+    width: 18px;
+    height: 18px;
+    stroke: white;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  #cameraInput { display: none; }
+
+  /* Preview */
+  .preview-card {
+    display: none;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .preview-img-wrap {
+    position: relative;
+    background: var(--gray-light);
+  }
+
+  .preview-img-wrap img {
+    width: 100%;
+    max-height: 240px;
+    object-fit: cover;
+    display: block;
+  }
+
+  .preview-change {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: rgba(255,255,255,0.92);
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-mid);
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s;
+    position: absolute;
+  }
+
+  .preview-change:hover { background: white; }
+
+  .preview-info {
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-top: 1px solid var(--border);
+  }
+
+  .preview-name {
+    font-size: 13px;
+    color: var(--text-mid);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+  }
+
+  .preview-size {
+    font-size: 12px;
+    color: var(--text-soft);
+    flex-shrink: 0;
+  }
+
+  /* Scan button */
+  .btn-scan {
+    display: none;
+    width: 100%;
+    margin-top: 12px;
+    padding: 16px 20px;
+    background: var(--green);
+    color: white;
+    border: none;
+    border-radius: var(--radius);
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    transition: background 0.15s, transform 0.1s;
+    letter-spacing: -0.2px;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .btn-scan:hover { background: #047857; }
+  .btn-scan:active { transform: scale(0.99); }
+
+  .btn-scan svg {
+    width: 20px;
+    height: 20px;
+    stroke: white;
+    fill: none;
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* Loading */
+  .loading-card {
+    display: none;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 40px 24px;
+    text-align: center;
+    margin-top: 16px;
+  }
+
+  .loading-ring {
+    width: 44px;
+    height: 44px;
+    border: 3px solid var(--gray-mid);
+    border-top-color: var(--blue);
+    border-radius: 50%;
+    animation: spin 0.75s linear infinite;
+    margin: 0 auto 16px;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .loading-label {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+
+  .loading-sub {
+    font-size: 13px;
+    color: var(--text-soft);
+  }
+
+  /* Steps */
+  .steps-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    margin-top: 20px;
+  }
+
+  .steps-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-soft);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 16px;
+  }
+
+  .step-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .step-item:last-child { border-bottom: none; padding-bottom: 0; }
+  .step-item:first-of-type { padding-top: 0; }
+
+  .step-num {
+    width: 26px;
+    height: 26px;
+    background: var(--blue-light);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--blue);
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  .step-body strong {
+    display: block;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 2px;
+  }
+
+  .step-body span {
+    font-size: 13px;
+    color: var(--text-soft);
+    line-height: 1.5;
+  }
+
+  /* ══════════════════════════════════════════
+     RESULT PAGE
+  ══════════════════════════════════════════ */
+
+  .result-page {
+    max-width: 560px;
+    margin: 0 auto;
+    padding: 24px 20px 60px;
+  }
+
+  /* Back button */
+  .btn-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-mid);
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    padding: 6px 14px;
+    cursor: pointer;
+    font-family: inherit;
+    margin-bottom: 20px;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .btn-back:hover { background: var(--gray-light); color: var(--text); }
+
+  .btn-back svg {
+    width: 14px;
+    height: 14px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* Verdict banner */
+  .verdict-banner {
+    border-radius: var(--radius-lg);
+    padding: 24px;
+    margin-bottom: 16px;
+    border: 1.5px solid transparent;
+    animation: fadeUp 0.35s cubic-bezier(0.16,1,0.3,1);
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .verdict-banner.genuine {
+    background: var(--green-light);
+    border-color: var(--green-mid);
+  }
+
+  .verdict-banner.suspicious {
+    background: var(--red-light);
+    border-color: var(--red-mid);
+  }
+
+  .verdict-banner.unverified,
+  .verdict-banner.not_medicine {
+    background: var(--amber-light);
+    border-color: var(--amber-mid);
+  }
+
+  .verdict-top {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+
+  .verdict-icon-wrap {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .genuine .verdict-icon-wrap  { background: rgba(5,150,105,0.12); }
+  .suspicious .verdict-icon-wrap { background: rgba(220,38,38,0.12); }
+  .unverified .verdict-icon-wrap,
+  .not_medicine .verdict-icon-wrap { background: rgba(217,119,6,0.12); }
+
+  .verdict-icon-wrap svg {
+    width: 26px;
+    height: 26px;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .genuine .verdict-icon-wrap svg  { stroke: var(--green); }
+  .suspicious .verdict-icon-wrap svg { stroke: var(--red); }
+  .unverified .verdict-icon-wrap svg,
+  .not_medicine .verdict-icon-wrap svg { stroke: var(--amber); }
+
+  .verdict-title {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.4px;
+    line-height: 1.2;
+    margin-bottom: 4px;
+  }
+
+  .genuine .verdict-title  { color: #065f46; }
+  .suspicious .verdict-title { color: #991b1b; }
+  .unverified .verdict-title,
+  .not_medicine .verdict-title { color: #92400e; }
+
+  .verdict-sub {
+    font-size: 13px;
+    font-weight: 400;
+  }
+
+  .genuine .verdict-sub  { color: #047857; }
+  .suspicious .verdict-sub { color: #b91c1c; }
+  .unverified .verdict-sub,
+  .not_medicine .verdict-sub { color: #b45309; }
+
+  /* Risk pill */
+  .risk-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 99px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+
+  .risk-pill.low      { background: rgba(5,150,105,0.1);  color: #065f46; }
+  .risk-pill.moderate { background: rgba(217,119,6,0.1);  color: #92400e; }
+  .risk-pill.high     { background: rgba(220,38,38,0.1);  color: #991b1b; }
+  .risk-pill.unknown  { background: rgba(107,114,128,0.1); color: #374151; }
+
+  .risk-pulse {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  .low .risk-pulse      { background: var(--green); }
+  .moderate .risk-pulse { background: var(--amber); }
+  .high .risk-pulse     { background: var(--red); }
+  .unknown .risk-pulse  { background: #9ca3af; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  /* Advisory */
+  .advisory-box {
+    padding: 14px 16px;
+    background: rgba(255,255,255,0.6);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    line-height: 1.65;
+    border-left: 3px solid transparent;
+  }
+
+  .genuine .advisory-box  { border-left-color: var(--green); color: #065f46; }
+  .suspicious .advisory-box { border-left-color: var(--red); color: #7f1d1d; }
+  .unverified .advisory-box,
+  .not_medicine .advisory-box { border-left-color: var(--amber); color: #78350f; }
+
+  /* Stats grid */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .stat-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .stat-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-soft);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 8px;
+  }
+
+  .stat-value {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    color: var(--text);
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+
+  .stat-bar-track {
+    height: 5px;
+    background: var(--gray-mid);
+    border-radius: 99px;
+    overflow: hidden;
+  }
+
+  .stat-bar-fill {
+    height: 100%;
+    border-radius: 99px;
+    transition: width 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+    width: 0%;
+  }
+
+  /* Image card */
+  .image-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    margin-bottom: 16px;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .image-card-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .image-card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-mid);
+  }
+
+  .image-card img {
+    width: 100%;
+    max-height: 200px;
+    object-fit: cover;
+    display: block;
+  }
+
+  /* What to do section */
+  .action-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    margin-bottom: 16px;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .action-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-soft);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 14px;
+  }
+
+  .action-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .action-item:last-child { border-bottom: none; padding-bottom: 0; }
+
+  .action-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+    font-size: 14px;
+  }
+
+  .action-text strong {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 1px;
+  }
+
+  .action-text span {
+    font-size: 12px;
+    color: var(--text-soft);
+    line-height: 1.5;
+  }
+
+  /* Scan again button */
+  .btn-scan-again {
+    width: 100%;
+    padding: 15px 20px;
+    background: var(--white);
+    color: var(--text);
+    border: 1.5px solid var(--border-mid);
+    border-radius: var(--radius);
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: background 0.15s, border-color 0.15s;
+    margin-bottom: 12px;
+  }
+
+  .btn-scan-again:hover {
+    background: var(--gray-light);
+    border-color: var(--text-soft);
+  }
+
+  /* Disclaimer */
+  .disclaimer {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    font-size: 12px;
+    color: var(--text-soft);
+    line-height: 1.6;
+    text-align: center;
+  }
+
+  /* Toast */
+  .toast {
+    display: none;
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--text);
+    color: white;
+    padding: 10px 18px;
+    border-radius: 99px;
+    font-size: 13px;
+    font-weight: 500;
+    z-index: 200;
+    white-space: nowrap;
+    box-shadow: var(--shadow-lg);
+    animation: toastIn 0.25s ease;
+  }
+
+  @keyframes toastIn {
+    from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+    to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+  }
+
+  /* Responsive */
+  @media (max-width: 380px) {
+    .stats-grid { grid-template-columns: 1fr; }
+    .scan-page, .result-page { padding-left: 16px; padding-right: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="header">
+  <a class="logo" href="#" onclick="showScanPage(); return false;">
+    <div class="logo-icon">
+      <svg viewBox="0 0 24 24"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+    </div>
+    <span class="logo-name">Medi<span>Scan</span></span>
+  </a>
+  <span class="header-badge">AI Powered</span>
+</header>
+
+<!-- ══ SCAN PAGE ══ -->
+<div class="page active" id="scanPage">
+  <div class="scan-page">
+
+    <div class="scan-hero">
+      <h1>Verify your medicine<br>before you take it</h1>
+      <p>Upload a photo of any medicine packaging and our AI detects counterfeits in seconds.</p>
+    </div>
+
+    <!-- Trust strip -->
+    <div class="trust-strip">
+      <div class="trust-item">
+        <div class="trust-dot"></div>
+        <span>AI Verified</span>
+      </div>
+      <div class="trust-item">
+        <div class="trust-dot"></div>
+        <span>Instant Results</span>
+      </div>
+      <div class="trust-item">
+        <div class="trust-dot"></div>
+        <span>Free to Use</span>
+      </div>
+    </div>
+
+    <!-- Upload zone -->
+    <div class="upload-zone" id="uploadZone">
+      <input type="file" id="fileInput" accept="image/*">
+      <div class="upload-illus">
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </div>
+      <div class="upload-title">Drop image here</div>
+      <div class="upload-sub">or tap to browse your gallery</div>
+    </div>
+
+    <div class="divider">or</div>
+
+    <!-- Camera -->
+    <button class="btn-camera" onclick="document.getElementById('cameraInput').click()">
+      <svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+      Take Photo with Camera
+    </button>
+    <input type="file" id="cameraInput" accept="image/*" capture="environment">
+
+    <!-- Preview -->
+    <div class="preview-card" id="previewCard" style="margin-top: 16px;">
+      <div class="preview-img-wrap">
+        <img id="previewImg" src="" alt="Preview">
+        <button class="preview-change" onclick="changeImage()">Change</button>
+      </div>
+      <div class="preview-info">
+        <span class="preview-name" id="previewName">image.jpg</span>
+        <span class="preview-size" id="previewSize"></span>
+      </div>
+    </div>
+
+    <!-- Scan button -->
+    <button class="btn-scan" id="scanBtn">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      Analyse Medicine
+    </button>
+
+    <!-- Loading -->
+    <div class="loading-card" id="loadingCard">
+      <div class="loading-ring"></div>
+      <div class="loading-label">Analysing packaging...</div>
+      <div class="loading-sub">Checking visual patterns, fonts and print quality</div>
+    </div>
+
+    <!-- How it works steps -->
+    <div class="steps-card" id="stepsCard">
+      <div class="steps-title">How it works</div>
+      <div class="step-item">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <strong>Photograph the packaging</strong>
+          <span>Take a clear photo of the medicine box, strip, or bottle label</span>
+        </div>
+      </div>
+      <div class="step-item">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <strong>AI analyses visual patterns</strong>
+          <span>Checks logo quality, font consistency, color accuracy and print quality</span>
+        </div>
+      </div>
+      <div class="step-item">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <strong>Get an instant verdict</strong>
+          <span>Receive a genuine or suspicious result with confidence score and advice</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══ RESULT PAGE ══ -->
+<div class="page" id="resultPage">
+  <div class="result-page">
+
+    <button class="btn-back" onclick="showScanPage()">
+      <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
+      Scan Another
+    </button>
+
+    <!-- Verdict banner -->
+    <div class="verdict-banner" id="verdictBanner">
+      <div class="verdict-top">
+        <div class="verdict-icon-wrap">
+          <svg id="verdictIcon" viewBox="0 0 24 24"></svg>
+        </div>
+        <div>
+          <div class="verdict-title" id="verdictTitle"></div>
+          <div class="verdict-sub" id="verdictSub"></div>
+        </div>
+      </div>
+      <div class="advisory-box" id="advisoryBox"></div>
+      <div style="margin-top: 12px;">
+        <span class="risk-pill" id="riskPill">
+          <span class="risk-pulse"></span>
+          <span id="riskPillText"></span>
+        </span>
+      </div>
+    </div>
+
+    <!-- Stats grid -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Confidence</div>
+        <div class="stat-value" id="statConf">—</div>
+        <div class="stat-bar-track">
+          <div class="stat-bar-fill" id="confBar"></div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Risk Level</div>
+        <div class="stat-value" id="statRisk">—</div>
+        <div class="stat-bar-track">
+          <div class="stat-bar-fill" id="riskBar"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scanned image -->
+    <div class="image-card" id="scannedImageCard">
+      <div class="image-card-header">
+        <span class="image-card-title">Scanned image</span>
+        <span class="preview-size" id="resultImgName" style="font-size:12px; color:var(--text-soft);"></span>
+      </div>
+      <img id="resultImg" src="" alt="Scanned medicine">
+    </div>
+
+    <!-- What to do -->
+    <div class="action-card" id="actionCard">
+      <div class="action-title">What to do</div>
+      <!-- filled dynamically -->
+    </div>
+
+    <button class="btn-scan-again" onclick="showScanPage()">
+      ↩ &nbsp;Scan another medicine
+    </button>
+
+    <div class="disclaimer">
+      ⚠ This tool assists detection — it does not replace professional verification.
+      Always consult your pharmacist or doctor when in doubt.
+    </div>
+
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+  let selectedFile = null;
+  let previewDataUrl = null;
+
+  const fileInput   = document.getElementById('fileInput');
+  const cameraInput = document.getElementById('cameraInput');
+  const uploadZone  = document.getElementById('uploadZone');
+  const previewCard = document.getElementById('previewCard');
+  const previewImg  = document.getElementById('previewImg');
+  const previewName = document.getElementById('previewName');
+  const previewSize = document.getElementById('previewSize');
+  const scanBtn     = document.getElementById('scanBtn');
+  const loadingCard = document.getElementById('loadingCard');
+  const stepsCard   = document.getElementById('stepsCard');
+
+  function fmtSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+    return (bytes/(1024*1024)).toFixed(1) + ' MB';
+  }
+
+  function handleFile(file) {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { showToast('Please select an image file'); return; }
+    selectedFile = file;
+    const reader = new FileReader();
+    reader.onload = e => {
+      previewDataUrl = e.target.result;
+      previewImg.src = e.target.result;
+      previewName.textContent = file.name;
+      previewSize.textContent = fmtSize(file.size);
+      uploadZone.style.display = 'none';
+      document.querySelector('.divider').style.display = 'none';
+      document.querySelector('.btn-camera').style.display = 'none';
+      previewCard.style.display = 'block';
+      scanBtn.style.display = 'flex';
+      stepsCard.style.display = 'none';
+    };
+    reader.readAsDataURL(file);
+  }
+
+  fileInput.addEventListener('change',   e => handleFile(e.target.files[0]));
+  cameraInput.addEventListener('change', e => handleFile(e.target.files[0]));
+
+  uploadZone.addEventListener('dragover',  e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+  uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+  uploadZone.addEventListener('drop', e => {
+    e.preventDefault();
+    uploadZone.classList.remove('drag-over');
+    handleFile(e.dataTransfer.files[0]);
+  });
+
+  function changeImage() {
+    fileInput.value = '';
+    cameraInput.value = '';
+    selectedFile = null;
+    previewDataUrl = null;
+    previewCard.style.display = 'none';
+    scanBtn.style.display = 'none';
+    uploadZone.style.display = 'block';
+    document.querySelector('.divider').style.display = 'flex';
+    document.querySelector('.btn-camera').style.display = 'flex';
+    stepsCard.style.display = 'block';
+  }
+
+  scanBtn.addEventListener('click', async () => {
+    if (!selectedFile) return;
+    scanBtn.style.display   = 'none';
+    previewCard.style.display = 'none';
+    loadingCard.style.display = 'block';
+
+    const formData = new FormData();
+    formData.append('image', selectedFile);
+
+    try {
+      const res  = await fetch('/predict', { method: 'POST', body: formData });
+      const data = await res.json();
+      loadingCard.style.display = 'none';
+      if (data.error) { showToast(data.error); resetScanPage(); return; }
+      showResultPage(data);
+    } catch (err) {
+      loadingCard.style.display = 'none';
+      showToast('Connection error. Is the server running?');
+      resetScanPage();
+    }
+  });
+
+  // ── Result page ──────────────────────────────────────────────────────────────
+  const ICON_CHECK   = '<path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>';
+  const ICON_WARN    = '<path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>';
+  const ICON_QUESTION= '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>';
+  const ICON_CAMERA  = '<path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/>';
+
+  const ACTIONS = {
+    genuine: [
+      { icon: '✓', bg: '#ecfdf5', text: 'Check expiry date', sub: 'Always verify the expiry date and batch number on the packaging' },
+      { icon: '✓', bg: '#ecfdf5', text: 'Inspect the seal', sub: 'Ensure the tamper-evident seal is intact and undamaged' },
+      { icon: '✓', bg: '#ecfdf5', text: 'Store correctly', sub: 'Follow storage instructions on the label for best effectiveness' },
+    ],
+    suspicious: [
+      { icon: '!', bg: '#fef2f2', text: 'Do not consume', sub: 'Stop use immediately and do not take this medicine' },
+      { icon: '!', bg: '#fef2f2', text: 'Return to pharmacy', sub: 'Take the medicine back to where you purchased it' },
+      { icon: '!', bg: '#fef2f2', text: 'Report the issue', sub: 'Report to CDSCO (India) or your local drug regulatory authority' },
+    ],
+    unverified: [
+      { icon: '?', bg: '#fffbeb', text: 'Consult your pharmacist', sub: 'Have a professional verify this medicine before consuming' },
+      { icon: '?', bg: '#fffbeb', text: 'Try a clearer photo', sub: 'Retake the photo with better lighting and the full label in frame' },
+      { icon: '?', bg: '#fffbeb', text: 'Check for official marks', sub: 'Look for CDSCO approval mark and hologram sticker on the packaging' },
+    ],
+    not_medicine: [
+      { icon: '↩', bg: '#fffbeb', text: 'Upload a medicine photo', sub: 'Please photograph the medicine box, strip, or bottle label directly' },
+      { icon: '↩', bg: '#fffbeb', text: 'Ensure good lighting', sub: 'Take the photo near a window or in a well-lit area' },
+      { icon: '↩', bg: '#fffbeb', text: 'Include the full label', sub: 'Make sure the brand name and packaging details are fully visible' },
+    ]
+  };
+
+  function showResultPage(data) {
+    const status = data.status;
+    const risk   = (data.risk_level || 'unknown').toLowerCase();
+
+    // Banner class
+    const banner = document.getElementById('verdictBanner');
+    banner.className = `verdict-banner ${status}`;
+
+    // Icon
+    const iconEl = document.getElementById('verdictIcon');
+    if (status === 'genuine')      iconEl.innerHTML = ICON_CHECK;
+    else if (status === 'suspicious') iconEl.innerHTML = ICON_WARN;
+    else if (status === 'not_medicine') iconEl.innerHTML = ICON_CAMERA;
+    else iconEl.innerHTML = ICON_QUESTION;
+
+    document.getElementById('verdictTitle').textContent = data.label;
+
+    const subs = {
+      genuine:     'Packaging appears authentic',
+      suspicious:  'Packaging inconsistencies detected',
+      unverified:  'Medicine not recognised in database',
+      not_medicine:'No medicine packaging detected'
+    };
+    document.getElementById('verdictSub').textContent = subs[status] || '';
+    document.getElementById('advisoryBox').textContent = data.message;
+
+    // Risk pill
+    const pill = document.getElementById('riskPill');
+    pill.className = `risk-pill ${risk}`;
+    const riskLabels = { low: 'Low Risk', moderate: 'Moderate Risk', high: 'High Risk', unknown: 'Unverified' };
+    document.getElementById('riskPillText').textContent = riskLabels[risk] || risk;
+
+    // Stats
+    const confVal = status === 'not_medicine' ? '—' : data.confidence + '%';
+    document.getElementById('statConf').textContent = confVal;
+
+    const riskToVal = { low: 'Low', moderate: 'Medium', high: 'High', unknown: 'N/A' };
+    document.getElementById('statRisk').textContent = riskToVal[risk] || '—';
+
+    const confBarColors = {
+      genuine: '#059669', suspicious: '#dc2626', unverified: '#d97706', not_medicine: '#9ca3af'
+    };
+    const confBar = document.getElementById('confBar');
+    confBar.style.background = confBarColors[status] || '#9ca3af';
+
+    const riskBarColors = { low: '#059669', moderate: '#d97706', high: '#dc2626', unknown: '#9ca3af' };
+    const riskBarWidths = { low: 30, moderate: 60, high: 90, unknown: 0 };
+    const riskBar = document.getElementById('riskBar');
+    riskBar.style.background = riskBarColors[risk] || '#9ca3af';
+
+    // Set image
+    document.getElementById('resultImg').src = previewDataUrl || '';
+    document.getElementById('resultImgName').textContent = selectedFile ? selectedFile.name : '';
+
+    // Actions
+    const actionCard = document.getElementById('actionCard');
+    const actions = ACTIONS[status] || ACTIONS.unverified;
+    const actionsHtml = actions.map(a => `
+      <div class="action-item">
+        <div class="action-icon" style="background:${a.bg}; font-size:14px;">${a.icon}</div>
+        <div class="action-text">
+          <strong>${a.text}</strong>
+          <span>${a.sub}</span>
+        </div>
+      </div>`).join('');
+    actionCard.innerHTML = `<div class="action-title">What to do</div>${actionsHtml}`;
+
+    // Switch page
+    document.getElementById('scanPage').classList.remove('active');
+    document.getElementById('resultPage').classList.add('active');
+    window.scrollTo(0, 0);
+
+    // Animate bars after page switch
+    setTimeout(() => {
+      if (status !== 'not_medicine') {
+        confBar.style.width = data.confidence + '%';
+      }
+      riskBar.style.width = (riskBarWidths[risk] || 0) + '%';
+    }, 120);
+  }
+
+  function showScanPage() {
+    document.getElementById('resultPage').classList.remove('active');
+    document.getElementById('scanPage').classList.add('active');
+    resetScanPage();
+    window.scrollTo(0, 0);
+  }
+
+  function resetScanPage() {
+    selectedFile = null;
+    previewDataUrl = null;
+    fileInput.value = '';
+    cameraInput.value = '';
+    previewCard.style.display = 'none';
+    scanBtn.style.display = 'none';
+    loadingCard.style.display = 'none';
+    uploadZone.style.display = 'block';
+    document.querySelector('.divider').style.display = 'flex';
+    document.querySelector('.btn-camera').style.display = 'flex';
+    stepsCard.style.display = 'block';
+    document.getElementById('confBar').style.width = '0%';
+    document.getElementById('riskBar').style.width = '0%';
+  }
+
+  function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.style.display = 'block';
+    setTimeout(() => { t.style.display = 'none'; }, 3000);
+  }
+</script>
+</body>
+</html>
