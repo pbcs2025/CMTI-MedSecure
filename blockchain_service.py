@@ -7,8 +7,12 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
+from typing import Any, Optional
 
-from web3 import Web3
+try:
+    from web3 import Web3  # type: ignore
+except ImportError:
+    Web3 = None
 
 
 GANACHE_URL = os.getenv("GANACHE_URL", "http://127.0.0.1:7545")
@@ -26,7 +30,7 @@ def _default_risk(prediction: str) -> str:
     return "HIGH"
 
 
-def create_result_object(prediction: str, confidence: float, risk_level: str | None = None) -> dict:
+def create_result_object(prediction: str, confidence: float, risk_level: Optional[str] = None) -> dict:
     """
     Build canonical result object:
     {
@@ -50,7 +54,7 @@ def generate_verification_hash(result_obj: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _load_contract(web3: Web3):
+def _load_contract(web3: Any):
     if not CONTRACT_ADDRESS:
         raise ValueError("Set MEDSECURE_CONTRACT_ADDRESS environment variable.")
     if not os.path.exists(CONTRACT_ABI_PATH):
@@ -69,6 +73,10 @@ def store_on_chain(image_id: str, hash_val: str, risk: str, timestamp: int) -> s
     """
     Store verification metadata on Ganache and return transaction hash.
     """
+    if Web3 is None:
+        raise ImportError(
+            "web3 is not installed. Install dependencies with: pip install -r requirements.txt"
+        )
     web3 = Web3(Web3.HTTPProvider(GANACHE_URL))
     if not web3.is_connected():
         raise ConnectionError(f"Could not connect to Ganache at {GANACHE_URL}")
