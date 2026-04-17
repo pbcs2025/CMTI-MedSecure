@@ -50,7 +50,7 @@ class MedicineVerifier:
     def __init__(self, model_path: str,
                  class_index_path: str = "model/class_indices.json"):
         print(f"Loading model from: {model_path}")
-        self.model = tf.keras.models.load_model(model_path, compile=False)
+        self.model = self._load_model(model_path)
 
         if os.path.exists(class_index_path):
             with open(class_index_path) as f:
@@ -59,6 +59,33 @@ class MedicineVerifier:
             self.class_index = {"0": "genuine", "1": "fake"}
 
         print("Model ready.")
+
+    def _load_model(self, model_path: str):
+        """
+        Load either:
+          - native Keras model file (.keras/.h5), or
+          - TF SavedModel directory (via TFSMLayer wrapper).
+        """
+        if os.path.isdir(model_path):
+            saved_pb = os.path.join(model_path, "saved_model.pb")
+            if not os.path.exists(saved_pb):
+                raise ValueError(f"Invalid SavedModel directory: {model_path}")
+
+            tfsm_layer = tf.keras.layers.TFSMLayer(model_path, call_endpoint="serve")
+            inputs = tf.keras.Input(shape=(IMG_SIZE, IMG_SIZE, 3))
+            outputs = tfsm_layer(inputs)
+            return tf.keras.Model(inputs=inputs, outputs=outputs, name="saved_model_wrapper")
+
+        try:
+            return tf.keras.models.load_model(model_path, compile=False)
+        except ValueError as e:
+            if model_path.endswith(".h5") and "No model config found" in str(e):
+                raise ValueError(
+                    f"{model_path} is not a full Keras model file. "
+                    "It is likely a weights-only or incomplete H5 file. "
+                    "Use a .keras model or a SavedModel directory."
+                ) from e
+            raise
 
     # ── Preprocessing ──────────────────────────────────────────────────────────
 
@@ -236,15 +263,42 @@ class MedicineVerifier:
 
 # ── Standalone test ───────────────────────────────────────────────────────────
 
-def _find_latest_h5():
-    h5_dir = "model"
-    if not os.path.isdir(h5_dir):
+def _find_latest_model():
+    model_dir = "model"
+    if not os.path.isdir(model_dir):
         return None
-    files = [f for f in os.listdir(h5_dir) if f.endswith(".h5")]
-    if not files:
-        return None
-    files.sort(reverse=True)
-    return os.path.join(h5_dir, files[0])
+
+    # Prefer native Keras format
+    keras_files = [f for f in os.listdir(model_dir) if f.endswith(".keras")]
+    if keras_files:
+        keras_files.sort(
+            key=lambda f: os.path.getmtime(os.path.join(model_dir, f)),
+            reverse=True
+        )
+        return os.path.join(model_dir, keras_files[0])
+
+    # Fallback to SavedModel directories
+    saved_root = os.path.join(model_dir, "saved_model")
+    if os.path.isdir(saved_root):
+        saved_dirs = []
+        for name in os.listdir(saved_root):
+            path = os.path.join(saved_root, name)
+            if os.path.isdir(path) and os.path.exists(os.path.join(path, "saved_model.pb")):
+                saved_dirs.append(path)
+        if saved_dirs:
+            saved_dirs.sort(key=os.path.getmtime, reverse=True)
+            return saved_dirs[0]
+
+    # Final fallback: legacy full-model .h5
+    h5_files = [f for f in os.listdir(model_dir) if f.endswith(".h5") and not f.endswith(".weights.h5")]
+    if h5_files:
+        h5_files.sort(
+            key=lambda f: os.path.getmtime(os.path.join(model_dir, f)),
+            reverse=True
+        )
+        return os.path.join(model_dir, h5_files[0])
+
+    return None
 
 
 if __name__ == "__main__":
@@ -253,7 +307,8 @@ if __name__ == "__main__":
     parser.add_argument("--model",  default=None)
     args = parser.parse_args()
 
-    model_path = args.model or _find_latest_h5()
+    
+    model_path = args.model or _find_latest_model()
     if not model_path:
         print("❌  No model found. Run train.py first.")
         exit(1)

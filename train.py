@@ -140,10 +140,7 @@ def build_model(img_size: int, dropout_rate: float = 0.4):
     x = get_augmentation_layer()(inputs)
 
     # MobileNetV2 preprocessing (scales [0,1] → [-1, 1])
-    x = layers.Lambda(
-        lambda t: t * 2.0 - 1.0,
-        name="mobilenet_preprocess"
-    )(x)
+    x = layers.Rescaling(scale=2.0, offset=-1.0, name="mobilenet_preprocess")(x)
 
     # Pretrained backbone – all layers frozen initially
     base_model = MobileNetV2(
@@ -378,26 +375,37 @@ def _plot_training_history(history_list, run_id):
 def export_model(model, run_id: str):
     """
     Export in two formats:
-      1. TF SavedModel  – recommended for backend (TF Serving / tf.saved_model.load)
-      2. .h5 file       – single-file Keras backup
+      1. TF SavedModel
+      2. .keras and optional .h5 backup
     """
+
     # TF SavedModel
     saved_path = os.path.join(SAVEDMODEL_DIR, run_id)
     model.export(saved_path)
     print(f"\n✅  SavedModel exported → {saved_path}/")
 
-    # .h5 backup
-    h5_path = os.path.join("model", f"{run_id}.h5")
-    model.save(h5_path)
-    print(f"✅  Keras .h5 backup   → {h5_path}")
+    # .keras backup
+    keras_path = os.path.join("model", f"{run_id}.keras")
+    model.save(keras_path)
+    print(f"✅  Keras backup (.keras) → {keras_path}")
 
-    # Save class index mapping for backend use
+    # .h5 backup (optional)
+    h5_path = os.path.join("model", f"{run_id}.h5")
+    try:
+        model.save(h5_path)
+        print(f"✅  Optional .h5 backup  → {h5_path}")
+    except Exception as e:
+        print(f"⚠️  Skipped .h5 export: {e}")
+
+    # Save class index mapping
     import json
     class_index = {str(i): name for i, name in enumerate(CLASS_NAMES)}
     idx_path = os.path.join("model", "class_indices.json")
+
     with open(idx_path, "w") as f:
         json.dump(class_index, f, indent=2)
-    print(f"✅  Class index map    → {idx_path}")
+
+    print(f"✅  Class index map → {idx_path}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
