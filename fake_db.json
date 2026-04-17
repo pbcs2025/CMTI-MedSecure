@@ -1,0 +1,14 @@
+{
+  "8900000000000": {
+    "reason": "Known counterfeit barcode"
+  },
+  "8901111111111": {
+    "reason": "Duplicate / tampered barcode"
+  },
+  "8902222222222": {
+    "reason": "Unregistered product"
+  },
+  "8903333333333": {
+    "reason": "Blacklisted product"
+  }
+}

@@ -183,6 +183,125 @@
     flex-shrink: 0;
   }
 
+  .mode-switch {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-bottom: 14px;
+  }
+
+  .mode-btn {
+    border: 1px solid var(--border-mid);
+    background: var(--white);
+    color: var(--text-mid);
+    border-radius: 99px;
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .mode-btn.active {
+    background: var(--blue-light);
+    color: var(--blue);
+    border-color: var(--blue-mid);
+  }
+
+  .barcode-card {
+    display: none;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+
+  .barcode-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+  }
+
+  .barcode-btn {
+    border: 1px solid var(--border-mid);
+    background: var(--gray-light);
+    color: var(--text-mid);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .barcode-input {
+    width: 100%;
+    border: 1px solid var(--border-mid);
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 13px;
+    margin-top: 8px;
+  }
+
+  .barcode-meta-card {
+    display: none;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 16px;
+    margin-bottom: 16px;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .component-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 10px;
+    margin-bottom: 12px;
+  }
+
+  .component-item {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    background: var(--gray-light);
+  }
+
+  .component-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-soft);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .component-value {
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+
+  .component-value.genuine { color: var(--green); }
+  .component-value.fake { color: var(--red); }
+
+  .component-note {
+    font-size: 12px;
+    color: var(--text-mid);
+    line-height: 1.4;
+  }
+
+  .combined-message {
+    margin-top: 4px;
+    background: var(--white);
+    border: 1px dashed var(--border-mid);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    font-size: 13px;
+    color: var(--text);
+  }
+
   /* Upload zone */
   .upload-zone {
     background: var(--white);
@@ -876,6 +995,7 @@
   /* Responsive */
   @media (max-width: 380px) {
     .stats-grid { grid-template-columns: 1fr; }
+    .component-grid { grid-template-columns: 1fr; }
     .scan-page, .result-page { padding-left: 16px; padding-right: 16px; }
   }
 </style>
@@ -902,6 +1022,11 @@
       <p>Upload a photo of any medicine packaging and our AI detects counterfeits in seconds.</p>
     </div>
 
+    <div class="mode-switch">
+      <button class="mode-btn active" id="modeImageBtn" onclick="setScanMode('image')">Image</button>
+      <button class="mode-btn" id="modeComboBtn" onclick="setScanMode('combo')">Barcode + Image Scan</button>
+    </div>
+
     <!-- Trust strip -->
     <div class="trust-strip">
       <div class="trust-item">
@@ -916,6 +1041,19 @@
         <div class="trust-dot"></div>
         <span>Free to Use</span>
       </div>
+    </div>
+
+    <div class="barcode-card" id="barcodeCard">
+      <div class="upload-title">Barcode verification</div>
+      <div class="upload-sub">Scan barcode with camera, upload barcode image, or type manually.</div>
+      <input class="barcode-input" id="barcodeValue" placeholder="Enter barcode value (EAN/UPC/CODE128)">
+      <div class="barcode-actions">
+        <button class="barcode-btn" onclick="startBarcodeScanner()">Scan Barcode (Camera)</button>
+        <button class="barcode-btn" onclick="document.getElementById('barcodeImageInput').click()">Upload Barcode Image</button>
+        <button class="barcode-btn" onclick="stopBarcodeScanner()">Stop Scanner</button>
+      </div>
+      <input type="file" id="barcodeImageInput" accept="image/*" style="display:none;">
+      <div id="barcodeScannerRegion" style="margin-top:10px; display:none;"></div>
     </div>
 
     <!-- Upload zone -->
@@ -1038,6 +1176,11 @@
       </div>
     </div>
 
+    <div class="barcode-meta-card" id="barcodeMetaCard">
+      <div class="action-title">Combined Verification Details</div>
+      <div id="barcodeMetaContent" style="font-size:13px; color:var(--text-mid); line-height:1.6;"></div>
+    </div>
+
     <!-- Scanned image -->
     <div class="image-card" id="scannedImageCard">
       <div class="image-card-header">
@@ -1068,9 +1211,13 @@
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
+<script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 <script>
   let selectedFile = null;
   let previewDataUrl = null;
+  let scanMode = 'image';
+  let barcodeScanner = null;
+  let barcodeScannerRunning = false;
 
   const fileInput   = document.getElementById('fileInput');
   const cameraInput = document.getElementById('cameraInput');
@@ -1082,6 +1229,49 @@
   const scanBtn     = document.getElementById('scanBtn');
   const loadingCard = document.getElementById('loadingCard');
   const stepsCard   = document.getElementById('stepsCard');
+  const barcodeCard = document.getElementById('barcodeCard');
+  const barcodeValueInput = document.getElementById('barcodeValue');
+  const barcodeImageInput = document.getElementById('barcodeImageInput');
+  const barcodeMetaCard = document.getElementById('barcodeMetaCard');
+  const barcodeMetaContent = document.getElementById('barcodeMetaContent');
+
+  function setScanMode(mode) {
+    scanMode = mode;
+    document.getElementById('modeImageBtn').classList.toggle('active', mode === 'image');
+    document.getElementById('modeComboBtn').classList.toggle('active', mode === 'combo');
+    barcodeCard.style.display = mode === 'combo' ? 'block' : 'none';
+  }
+
+  async function startBarcodeScanner() {
+    const region = document.getElementById('barcodeScannerRegion');
+    region.style.display = 'block';
+    if (!barcodeScanner) {
+      barcodeScanner = new Html5Qrcode("barcodeScannerRegion");
+    }
+    if (barcodeScannerRunning) return;
+    try {
+      await barcodeScanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 250, height: 120 } },
+        (decodedText) => {
+          barcodeValueInput.value = decodedText;
+          showToast("Barcode scanned successfully");
+          stopBarcodeScanner();
+        }
+      );
+      barcodeScannerRunning = true;
+    } catch (err) {
+      showToast("Unable to start barcode camera scanner");
+    }
+  }
+
+  async function stopBarcodeScanner() {
+    if (barcodeScanner && barcodeScannerRunning) {
+      try { await barcodeScanner.stop(); } catch (_) {}
+      barcodeScannerRunning = false;
+    }
+    document.getElementById('barcodeScannerRegion').style.display = 'none';
+  }
 
   function fmtSize(bytes) {
     if (bytes < 1024) return bytes + ' B';
@@ -1120,6 +1310,19 @@
     handleFile(e.dataTransfer.files[0]);
   });
 
+  barcodeImageInput.addEventListener('change', async e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    try {
+      const scanner = new Html5Qrcode("barcodeScannerRegion");
+      const decoded = await scanner.scanFile(f, true);
+      barcodeValueInput.value = decoded;
+      showToast("Barcode decoded from image");
+    } catch (err) {
+      showToast("Could not decode barcode from selected image");
+    }
+  });
+
   function changeImage() {
     fileInput.value = '';
     cameraInput.value = '';
@@ -1131,19 +1334,29 @@
     document.querySelector('.divider').style.display = 'flex';
     document.querySelector('.btn-camera').style.display = 'flex';
     stepsCard.style.display = 'block';
+    barcodeMetaCard.style.display = 'none';
+    barcodeMetaContent.innerHTML = '';
   }
 
   scanBtn.addEventListener('click', async () => {
     if (!selectedFile) return;
+    if (scanMode === 'combo' && !barcodeValueInput.value.trim()) {
+      showToast('Barcode is required in Barcode + Image Scan mode');
+      return;
+    }
     scanBtn.style.display   = 'none';
     previewCard.style.display = 'none';
     loadingCard.style.display = 'block';
 
     const formData = new FormData();
     formData.append('image', selectedFile);
+    if (scanMode === 'combo') {
+      formData.append('barcode', barcodeValueInput.value.trim());
+    }
 
     try {
-      const res  = await fetch('/predict', { method: 'POST', body: formData });
+      const endpoint = scanMode === 'combo' ? '/predict-with-barcode' : '/predict';
+      const res  = await fetch(endpoint, { method: 'POST', body: formData });
       const data = await res.json();
       loadingCard.style.display = 'none';
       if (data.error) { showToast(data.error); resetScanPage(); return; }
@@ -1209,6 +1422,40 @@
     };
     document.getElementById('verdictSub').textContent = subs[status] || '';
     document.getElementById('advisoryBox').textContent = data.message;
+    barcodeMetaCard.style.display = 'none';
+
+    if (data.mode === 'barcode_plus_image' && data.image_result && data.barcode_result) {
+      barcodeMetaCard.style.display = 'block';
+      const br = data.barcode_result;
+      const im = data.image_result;
+      const med = br.data || {};
+      const component = data.component_analysis || {};
+      const barcodeVerdict = (component.barcode_verdict || (br.status === 'VALID' ? 'GENUINE' : 'FAKE')).toUpperCase();
+      const imageVerdict = (component.image_verdict || (im.status === 'genuine' ? 'GENUINE' : 'FAKE')).toUpperCase();
+      const barcodeClass = barcodeVerdict === 'GENUINE' ? 'genuine' : 'fake';
+      const imageClass = imageVerdict === 'GENUINE' ? 'genuine' : 'fake';
+      const combinedMessage = data.message || 'Combined analysis is unavailable.';
+      barcodeMetaContent.innerHTML = `
+        <div class="component-grid">
+          <div class="component-item">
+            <div class="component-label">Barcode Result</div>
+            <div class="component-value ${barcodeClass}">${barcodeVerdict}</div>
+            <div class="component-note">Status: ${br.status || 'N/A'}</div>
+          </div>
+          <div class="component-item">
+            <div class="component-label">Image Result</div>
+            <div class="component-value ${imageClass}">${imageVerdict}</div>
+            <div class="component-note">Model: ${im.label || im.status || 'N/A'}</div>
+          </div>
+        </div>
+        <div class="combined-message"><strong>Combined Analysis:</strong> ${combinedMessage}</div>
+        <div style="margin-top:10px;"><strong>Barcode ID:</strong> ${br.barcode || 'N/A'}</div>
+        <div><strong>Medicine Name:</strong> ${med.name || 'N/A'}</div>
+        <div><strong>Manufacturer:</strong> ${med.manufacturer || 'N/A'}</div>
+        <div><strong>Usage:</strong> ${med.usage || 'N/A'}</div>
+        <div><strong>Category:</strong> ${med.category || 'N/A'}</div>
+      `;
+    }
 
     // Risk pill
     const pill = document.getElementById('riskPill');
@@ -1284,6 +1531,10 @@
     document.querySelector('.divider').style.display = 'flex';
     document.querySelector('.btn-camera').style.display = 'flex';
     stepsCard.style.display = 'block';
+    barcodeMetaCard.style.display = 'none';
+    barcodeMetaContent.innerHTML = '';
+    barcodeValueInput.value = '';
+    stopBarcodeScanner();
     document.getElementById('confBar').style.width = '0%';
     document.getElementById('riskBar').style.width = '0%';
   }

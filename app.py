@@ -1,11 +1,13 @@
 """
-Flask backend for two-stage counterfeit medicine detection.
+Flask backend for two-stage counterfeit medicine detection + barcode validation.
 """
 
+import json
 import os
 import sys
 import uuid
 from flask import Flask, request, jsonify, render_template
+from flask_cors import CORS
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from predict import MedicineVerifier
@@ -31,9 +33,13 @@ def find_models():
     return None, None
 
 app = Flask(__name__)
+CORS(app)
 app.config["UPLOAD_FOLDER"]     = UPLOAD_FOLDER
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_MB * 1024 * 1024
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+GENUINE_DB_PATH = "genuine_db.json"
+FAKE_DB_PATH = "fake_db.json"
 
 stage1_model, stage2_model = find_models()
 if not stage2_model:
@@ -48,8 +54,99 @@ print(f"[OK] Loading Stage 2 model: {stage2_model}")
 verifier = MedicineVerifier(stage1_model, stage2_model)
 print("[OK] Server ready.\n")
 
+
+def _load_json_db(path: str):
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+GENUINE_DB = _load_json_db(GENUINE_DB_PATH)
+FAKE_DB = _load_json_db(FAKE_DB_PATH)
+
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTS
+
+
+def lookup_barcode(barcode: str):
+    if barcode in GENUINE_DB:
+        return {
+            "status": "VALID",
+            "barcode": barcode,
+            "data": GENUINE_DB[barcode],
+        }
+    if barcode in FAKE_DB:
+        reason = FAKE_DB[barcode].get("reason", "Known counterfeit barcode")
+        return {
+            "status": "FAKE",
+            "barcode": barcode,
+            "message": f"⚠ Fake medicine detected: {reason}",
+            "data": FAKE_DB[barcode],
+        }
+    return {
+        "status": "NOT FOUND",
+        "barcode": barcode,
+        "message": "Medicine not found in database",
+    }
+
+
+def combine_results(image_result: dict, barcode_result: dict):
+    image_status = image_result.get("status")
+    barcode_status = barcode_result.get("status")
+    image_verdict = "GENUINE" if image_status == "genuine" else "FAKE"
+    barcode_verdict = "GENUINE" if barcode_status == "VALID" else "FAKE"
+
+    if barcode_verdict == "GENUINE" and image_verdict == "GENUINE":
+        final_status = "genuine"
+        final_label = "Genuine"
+        final_message = (
+            "Barcode is genuine and image analysis is genuine. "
+            "Final verdict: medicine appears genuine."
+        )
+        final_risk = "low"
+    elif barcode_verdict == "GENUINE" and image_verdict == "FAKE":
+        final_status = "suspicious"
+        final_label = "Suspicious"
+        final_message = (
+            "Barcode verification is genuine, but image analysis is suspicious/fake. "
+            "Final verdict: medicine is suspected as fake."
+        )
+        final_risk = "high"
+    elif barcode_verdict == "FAKE" and image_verdict == "GENUINE":
+        final_status = "suspicious"
+        final_label = "Suspicious"
+        final_message = (
+            "Image analysis is genuine, but barcode is fake or not found in trusted records. "
+            "Final verdict: medicine is suspected as fake."
+        )
+        final_risk = "high" if barcode_status == "FAKE" else "moderate"
+    else:
+        final_status = "suspicious"
+        final_label = "Suspicious"
+        final_message = (
+            "Both barcode verification and image analysis indicate suspicious/fake signals. "
+            "Final verdict: medicine is suspected as fake."
+        )
+        final_risk = "high" if image_status == "suspicious" else "moderate"
+
+    return {
+        "status": final_status,
+        "label": final_label,
+        "message": final_message,
+        "risk_level": final_risk,
+        "confidence": round(image_result.get("confidence", 0.0) * 100, 1),
+        "raw_score": image_result.get("raw_score", 0.0),
+        "mode": "barcode_plus_image",
+        "image_result": image_result,
+        "barcode_result": barcode_result,
+        "component_analysis": {
+            "barcode_verdict": barcode_verdict,
+            "barcode_status": barcode_status,
+            "image_verdict": image_verdict,
+            "image_status": image_status,
+        },
+    }
 
 @app.route("/")
 def index():
@@ -82,12 +179,59 @@ def predict():
         "confidence": round(result["confidence"] * 100, 1),
         "risk_level": result["risk_level"],
         "raw_score":  result["raw_score"],
-        "message":    result["message"]
+        "message":    result["message"],
+        "mode": "image_only",
     })
+
+
+@app.route("/get-medicine", methods=["POST"])
+def get_medicine():
+    data = request.get_json(silent=True) or {}
+    barcode = str(data.get("barcode", "")).strip()
+    if not barcode:
+        return jsonify({"error": "barcode is required"}), 400
+    return jsonify(lookup_barcode(barcode))
+
+
+@app.route("/predict-with-barcode", methods=["POST"])
+def predict_with_barcode():
+    if "image" not in request.files:
+        return jsonify({"error": "No image uploaded"}), 400
+    barcode = str(request.form.get("barcode", "")).strip()
+    if not barcode:
+        return jsonify({"error": "barcode is required"}), 400
+
+    file = request.files["image"]
+    if not file.filename or not allowed_file(file.filename):
+        return jsonify({"error": "Invalid file. Use JPG, PNG or WEBP"}), 400
+
+    ext = file.filename.rsplit(".", 1)[1].lower()
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(filepath)
+
+    try:
+        image_result = verifier.predict(filepath)
+        barcode_result = lookup_barcode(barcode)
+        combined = combine_results(image_result, barcode_result)
+    except Exception as e:
+        os.remove(filepath)
+        return jsonify({"error": str(e)}), 500
+
+    os.remove(filepath)
+    return jsonify(combined)
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "stage1_model": stage1_model, "stage2_model": stage2_model})
+    return jsonify(
+        {
+            "status": "ok",
+            "stage1_model": stage1_model,
+            "stage2_model": stage2_model,
+            "genuine_db_count": len(GENUINE_DB),
+            "fake_db_count": len(FAKE_DB),
+        }
+    )
 
 
 @app.route("/store-result", methods=["POST"])

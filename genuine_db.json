@@ -1,0 +1,20 @@
+{
+  "8901296110669": {
+    "name": "Zole-F",
+    "manufacturer": "Verified Pharma",
+    "usage": "Antifungal",
+    "composition": "Refer product packaging",
+    "category": "Tablet",
+    "pack_size": "10 tablets",
+    "country": "India"
+  },
+  "8906031316078": {
+    "name": "Assure Soap (Neem, Tulsi & Pudina)",
+    "manufacturer": "Vestige Marketing Pvt. Ltd.",
+    "usage": "Daily bathing soap for cleansing and maintaining skin moisture",
+    "composition": "TFM 76%, Neem, Tulsi, Pudina extracts",
+    "category": "Toilet Soap (Grade I)",
+    "pack_size": "75 g",
+    "country": "India"
+  }
+}
