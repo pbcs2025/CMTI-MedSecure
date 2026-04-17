@@ -9,6 +9,11 @@ from flask import Flask, request, jsonify, render_template
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from predict import MedicineVerifier
+from blockchain_service import (
+    create_result_object,
+    generate_verification_hash,
+    store_on_chain,
+)
 
 UPLOAD_FOLDER  = "uploads"
 ALLOWED_EXTS   = {"jpg", "jpeg", "png", "webp", "avif"}
@@ -83,6 +88,58 @@ def predict():
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "stage1_model": stage1_model, "stage2_model": stage2_model})
+
+
+@app.route("/store-result", methods=["POST"])
+def store_result():
+    """
+    Store an already computed verification result on blockchain.
+    Expected JSON input:
+    {
+      "prediction": "Genuine" | "Suspicious",
+      "confidence": 0.93,
+      "risk_level": "LOW" | "HIGH"   # optional; auto-derived if absent
+    }
+    """
+    data = request.get_json(silent=True) or {}
+    prediction = data.get("prediction")
+    confidence = data.get("confidence")
+    risk_level = data.get("risk_level")
+
+    if prediction is None or confidence is None:
+        return jsonify({"error": "prediction and confidence are required"}), 400
+
+    try:
+        confidence = float(confidence)
+    except (TypeError, ValueError):
+        return jsonify({"error": "confidence must be numeric"}), 400
+
+    result_obj = create_result_object(
+        prediction=prediction,
+        confidence=confidence,
+        risk_level=risk_level,
+    )
+    verification_hash = generate_verification_hash(result_obj)
+
+    try:
+        tx_hash = store_on_chain(
+            image_id=result_obj["image_id"],
+            hash_val=verification_hash,
+            risk=result_obj["risk_level"],
+            timestamp=result_obj["timestamp"],
+        )
+    except Exception as e:
+        return jsonify({"error": f"blockchain store failed: {e}"}), 500
+
+    return jsonify(
+        {
+            "blockchain_tx_hash": tx_hash,
+            "verification_hash": verification_hash,
+            "image_id": result_obj["image_id"],
+            "timestamp": result_obj["timestamp"],
+        }
+    )
+
 
 if __name__ == "__main__":
     print("=" * 50)

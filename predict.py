@@ -42,7 +42,6 @@ class MedicineVerifier:
         if self.has_stage1:
             self.medicine_model = tf.keras.models.load_model(medicine_model_path, compile=False)
         self.auth_model = tf.keras.models.load_model(authenticity_model_path, compile=False)
-        # Keep preprocessing aligned with model input resolution.
         self.img_size = int(self.auth_model.input_shape[1]) if self.auth_model.input_shape[1] else IMG_SIZE
         self.medicine_threshold = medicine_threshold
         self.authenticity_threshold = authenticity_threshold

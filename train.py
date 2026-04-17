@@ -178,6 +178,7 @@ def train_stage(
     paths, labels = stratified_cap(paths, labels, max_samples=max_samples)
     if max_samples > 0:
         print(f"Capped dataset to {len(paths)} samples for faster training.")
+
     x_train, x_tmp, y_train, y_tmp = train_test_split(
         paths, labels, test_size=0.30, stratify=labels, random_state=SEED
     )
@@ -254,7 +255,7 @@ def main():
         print("\nSkipping Stage 2 training.")
         print("Reason: --skip-stage2 used.")
     elif os.path.exists(stage2_model_path) and not args.force_stage2:
-        print(f"\nSkipping Stage 2 training.")
+        print("\nSkipping Stage 2 training.")
         print(f"Reason: existing model found at {stage2_model_path}.")
         print("Use --force-stage2 to retrain this stage.")
     else:
