@@ -1,13 +1,5 @@
 """
-app.py  (v2)
-------------
-Flask backend for the Counterfeit Medicine Detection web app.
-Uses predict_v2.py which handles non-medicine images and low-confidence cases.
-
-Usage:
-    pip install flask
-    python app.py
-    Open: http://localhost:5000
+Flask backend for two-stage counterfeit medicine detection.
 """
 
 import os
@@ -22,28 +14,34 @@ UPLOAD_FOLDER  = "uploads"
 ALLOWED_EXTS   = {"jpg", "jpeg", "png", "webp", "avif"}
 MAX_CONTENT_MB = 16
 
-def find_model():
-    h5_dir = "model"
-    if os.path.isdir(h5_dir):
-        files = [f for f in os.listdir(h5_dir) if f.endswith(".h5")]
-        if files:
-            files.sort(reverse=True)
-            return os.path.join(h5_dir, files[0])
-    return None
+def find_models():
+    stage1 = "model/stage1_medicine_detector.h5"
+    stage2 = "model/stage2_authenticity_classifier.h5"
+    # Backward compatible fallback to previous single-model setup.
+    legacy = "model/counterfeit_mobilenetv2_e30_b32.h5"
+    if os.path.exists(stage2):
+        return stage1 if os.path.exists(stage1) else None, stage2
+    if os.path.exists(legacy):
+        return None, legacy
+    return None, None
 
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"]     = UPLOAD_FOLDER
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_MB * 1024 * 1024
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-model_path = find_model()
-if not model_path:
-    print("❌  No trained model found. Run train.py first.")
+stage1_model, stage2_model = find_models()
+if not stage2_model:
+    print("[ERROR] No model found. Train Stage 2 first with: python train.py")
     sys.exit(1)
 
-print(f"✅  Loading model: {model_path}")
-verifier = MedicineVerifier(model_path)
-print("✅  Server ready.\n")
+if stage1_model:
+    print(f"[OK] Loading Stage 1 model: {stage1_model}")
+else:
+    print("[WARN] Stage 1 model missing. Running in Stage-2-only compatibility mode.")
+print(f"[OK] Loading Stage 2 model: {stage2_model}")
+verifier = MedicineVerifier(stage1_model, stage2_model)
+print("[OK] Server ready.\n")
 
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTS
@@ -84,7 +82,7 @@ def predict():
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "model": model_path})
+    return jsonify({"status": "ok", "stage1_model": stage1_model, "stage2_model": stage2_model})
 
 if __name__ == "__main__":
     print("=" * 50)

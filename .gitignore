@@ -1,1 +1,7 @@
+__pycache__/
+*.pyc
+
 dataset/
+logs/
+model/
+*.h5

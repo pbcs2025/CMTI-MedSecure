@@ -1,502 +1,281 @@
 """
 train.py
 --------
-Full training pipeline for the Counterfeit Medicine Detection model.
-
-Architecture : MobileNetV2 (ImageNet pretrained) + custom classification head
-Framework    : TensorFlow / Keras
-Input        : dataset/genuine/  and  dataset/fake/
-Output       : model/saved_model/       ← full SavedModel for backend serving
-               model/saved_model.h5     ← single-file Keras backup
-               model/checkpoints/       ← best weights during training
-               logs/training/           ← TensorBoard logs
-
-Usage:
-    pip install tensorflow scikit-learn matplotlib seaborn
-    python train.py
-
-Optional flags:
-    --epochs     50          (default: 30)
-    --batch      32          (default: 32)
-    --img-size   224         (default: 224)
-    --fine-tune               Enable second-pass fine-tuning of top conv layers
-    --no-plot                 Skip saving evaluation plots
+Two-stage training pipeline:
+  Stage 1: medicine vs non_medicine
+  Stage 2: genuine vs fake
 """
 
-import os
 import argparse
-import warnings
-warnings.filterwarnings("ignore")
+import os
+from typing import Tuple
 
 import numpy as np
-import matplotlib
-matplotlib.use("Agg")           # headless – no display required
-import matplotlib.pyplot as plt
-import seaborn as sns
-
 import tensorflow as tf
+from sklearn.model_selection import train_test_split
 from tensorflow import keras
-from tensorflow.keras import layers, callbacks
+from tensorflow.keras import callbacks, layers
 from tensorflow.keras.applications import MobileNetV2
 
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import (classification_report, confusion_matrix,
-                              roc_auc_score, roc_curve)
-
-# ── Reproducibility ───────────────────────────────────────────────────────────
 SEED = 42
-tf.random.set_seed(SEED)
 np.random.seed(SEED)
+tf.random.set_seed(SEED)
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
-GENUINE_DIR     = "dataset/genuine"
-FAKE_DIR        = "dataset/fake"
-CHECKPOINT_DIR  = "model/checkpoints"
-SAVEDMODEL_DIR  = "model/saved_model"
-LOG_DIR         = "logs/training"
-PLOTS_DIR       = "model/plots"
-
-os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-os.makedirs(SAVEDMODEL_DIR, exist_ok=True)
-os.makedirs(LOG_DIR,        exist_ok=True)
-os.makedirs(PLOTS_DIR,      exist_ok=True)
-
-CLASS_NAMES   = ["genuine", "fake"]   # 0 = genuine, 1 = fake
-VALID_EXTS    = {".jpg", ".jpeg", ".png", ".webp"}
+VALID_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+MODEL_DIR = "model"
+os.makedirs(MODEL_DIR, exist_ok=True)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 1.  DATA LOADING
-# ══════════════════════════════════════════════════════════════════════════════
+def _count_images(folder: str) -> int:
+    if not os.path.isdir(folder):
+        return 0
+    return sum(1 for f in os.listdir(folder) if os.path.splitext(f)[1].lower() in VALID_EXTS)
 
-def load_paths_and_labels(genuine_dir: str, fake_dir: str):
-    """Return parallel lists of file paths and integer labels."""
+
+def bootstrap_medicine_folder():
+    """
+    If dataset/medicine is missing, populate it from existing genuine+fake images.
+    This avoids hard crash for users migrating from old project structure.
+    """
+    medicine_dir = "dataset/medicine"
+    if os.path.isdir(medicine_dir) and _count_images(medicine_dir) > 0:
+        return
+
+    os.makedirs(medicine_dir, exist_ok=True)
+    copied = 0
+    for src_dir in ["dataset/genuine", "dataset/fake"]:
+        if not os.path.isdir(src_dir):
+            continue
+        for name in os.listdir(src_dir):
+            ext = os.path.splitext(name)[1].lower()
+            if ext not in VALID_EXTS:
+                continue
+            src = os.path.join(src_dir, name)
+            dst = os.path.join(medicine_dir, f"{os.path.basename(src_dir)}_{name}")
+            if os.path.exists(dst):
+                continue
+            with open(src, "rb") as rf, open(dst, "wb") as wf:
+                wf.write(rf.read())
+            copied += 1
+    if copied > 0:
+        print(f"Bootstrap: copied {copied} images into dataset/medicine")
+
+
+def collect_paths(class_a_dir: str, class_b_dir: str) -> Tuple[np.ndarray, np.ndarray]:
     paths, labels = [], []
-
-    for label_idx, folder in enumerate([genuine_dir, fake_dir]):
+    for idx, folder in enumerate([class_a_dir, class_b_dir]):
         if not os.path.isdir(folder):
-            raise FileNotFoundError(
-                f"Folder not found: '{folder}'\n"
-                "Run setup_dataset.py first, then populate dataset/genuine/ "
-                "with images, then run generate_fakes.py."
-            )
+            raise FileNotFoundError(f"Missing folder: {folder}")
         files = [
             os.path.join(folder, f)
             for f in os.listdir(folder)
             if os.path.splitext(f)[1].lower() in VALID_EXTS
         ]
         paths.extend(files)
-        labels.extend([label_idx] * len(files))
-        print(f"   {CLASS_NAMES[label_idx]:>10} : {len(files)} images")
+        labels.extend([idx] * len(files))
+        print(f"{folder}: {len(files)} images")
 
-    return np.array(paths), np.array(labels)
-
-
-def decode_image(path: str, img_size: int) -> tf.Tensor:
-    raw  = tf.io.read_file(path)
-    img  = tf.image.decode_image(raw, channels=3, expand_animations=False)
-    img  = tf.image.resize(img, [img_size, img_size])
-    img  = tf.cast(img, tf.float32) / 255.0   # normalise to [0, 1]
-    return img
+    return np.array(paths), np.array(labels, dtype=np.int32)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 2.  AUGMENTATION PIPELINE
-# ══════════════════════════════════════════════════════════════════════════════
-# Applied only during training to artificially expand diversity.
-
-def get_augmentation_layer():
-    """
-    Returns a Sequential augmentation sub-model.
-    These layers are active only during model.fit (training=True).
-    """
-    return keras.Sequential([
-        layers.RandomFlip("horizontal"),
-        layers.RandomRotation(0.12),            # ±12% rotation
-        layers.RandomZoom(0.15),                # ±15% zoom
-        layers.RandomTranslation(0.1, 0.1),     # shift up to 10%
-        layers.RandomBrightness(0.2),           # ±20% brightness
-        layers.RandomContrast(0.2),             # ±20% contrast
-    ], name="augmentation")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 3.  MODEL ARCHITECTURE
-# ══════════════════════════════════════════════════════════════════════════════
-
-def build_model(img_size: int, dropout_rate: float = 0.4):
-    """
-    Transfer learning model:
-        Input → Augmentation → MobileNetV2 (frozen) → GlobalAvgPool
-              → Dense(256, ReLU) → Dropout → Dense(1, Sigmoid)
-
-    Output: single sigmoid neuron
-        < 0.5  →  Genuine
-        ≥ 0.5  →  Fake / Suspicious
-    """
-    inputs = keras.Input(shape=(img_size, img_size, 3), name="image_input")
-
-    # Augmentation (only active during training)
-    x = get_augmentation_layer()(inputs)
-
-    # MobileNetV2 preprocessing (scales [0,1] → [-1, 1])
-    x = layers.Lambda(
-        lambda t: t * 2.0 - 1.0,
-        name="mobilenet_preprocess"
-    )(x)
-
-    # Pretrained backbone – all layers frozen initially
-    base_model = MobileNetV2(
-        input_shape=(img_size, img_size, 3),
-        include_top=False,
-        weights="imagenet"
+def stratified_cap(paths: np.ndarray, labels: np.ndarray, max_samples: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Reduce dataset size with class balance preserved."""
+    if max_samples <= 0 or len(paths) <= max_samples:
+        return paths, labels
+    x_keep, _, y_keep, _ = train_test_split(
+        paths, labels, train_size=max_samples, stratify=labels, random_state=SEED
     )
-    base_model.trainable = False
-
-    x = base_model(x, training=False)
-
-    # Classification head
-    x = layers.GlobalAveragePooling2D(name="gap")(x)
-    x = layers.Dense(256, activation="relu", name="fc1")(x)
-    x = layers.BatchNormalization(name="bn1")(x)
-    x = layers.Dropout(dropout_rate, name="dropout")(x)
-    outputs = layers.Dense(1, activation="sigmoid", name="prediction")(x)
-
-    model = keras.Model(inputs, outputs, name="CounterfeitDetector")
-    return model, base_model
+    return x_keep, y_keep
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 4.  TRAINING
-# ══════════════════════════════════════════════════════════════════════════════
+def decode_image(path: tf.Tensor, img_size: int) -> tf.Tensor:
+    raw = tf.io.read_file(path)
+    image = tf.image.decode_image(raw, channels=3, expand_animations=False)
+    image = tf.image.resize(image, [img_size, img_size])
+    image = tf.cast(image, tf.float32) / 255.0
+    return image
 
-def make_tf_dataset(paths, labels, img_size, batch_size, shuffle=False):
+
+def make_dataset(paths, labels, img_size, batch_size, training=False):
     ds = tf.data.Dataset.from_tensor_slices((paths, labels))
-    if shuffle:
-        ds = ds.shuffle(buffer_size=len(paths), seed=SEED)
+    if training:
+        ds = ds.shuffle(len(paths), seed=SEED)
     ds = ds.map(
-        lambda p, l: (decode_image(p, img_size), l),
-        num_parallel_calls=tf.data.AUTOTUNE
+        lambda p, y: (decode_image(p, img_size), y),
+        num_parallel_calls=tf.data.AUTOTUNE,
     )
     ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
     return ds
 
 
-def get_callbacks(run_id: str):
-    ckpt_path = os.path.join(CHECKPOINT_DIR, f"{run_id}_best.weights.h5")
-    return [
-        callbacks.ModelCheckpoint(
-            filepath=ckpt_path,
-            monitor="val_auc",
-            save_best_only=True,
-            save_weights_only=True,
-            mode="max",
-            verbose=1
-        ),
+def build_binary_model(img_size: int, backbone: str = "mobilenet") -> keras.Model:
+    inputs = keras.Input(shape=(img_size, img_size, 3))
+    aug = keras.Sequential(
+        [
+            layers.RandomFlip("horizontal"),
+            layers.RandomRotation(0.1),
+            layers.RandomZoom(0.1),
+            layers.RandomContrast(0.1),
+        ]
+    )(inputs)
+    x = layers.Lambda(lambda t: t * 2.0 - 1.0)(aug)
+
+    if backbone == "resnet":
+        base = keras.applications.ResNet50(
+            include_top=False,
+            weights="imagenet",
+            input_shape=(img_size, img_size, 3),
+        )
+    else:
+        base = MobileNetV2(
+            include_top=False,
+            weights="imagenet",
+            input_shape=(img_size, img_size, 3),
+        )
+
+    base.trainable = False
+    x = base(x, training=False)
+    x = layers.GlobalAveragePooling2D()(x)
+    x = layers.Dense(256, activation="relu")(x)
+    x = layers.Dropout(0.4)(x)
+    outputs = layers.Dense(1, activation="sigmoid")(x)
+    model = keras.Model(inputs, outputs)
+    return model
+
+
+def fit_one_model(model, train_ds, val_ds, epochs: int, early_stop_patience: int = 5):
+    model.compile(
+        optimizer=keras.optimizers.Adam(1e-3),
+        loss="binary_crossentropy",
+        metrics=["accuracy", keras.metrics.AUC(name="auc")],
+    )
+    cbs = [
         callbacks.EarlyStopping(
             monitor="val_auc",
-            patience=7,
-            restore_best_weights=True,
             mode="max",
-            verbose=1
+            patience=early_stop_patience,
+            restore_best_weights=True,
         ),
-        callbacks.ReduceLROnPlateau(
-            monitor="val_loss",
-            factor=0.4,
-            patience=4,
-            min_lr=1e-7,
-            verbose=1
-        ),
-        callbacks.TensorBoard(
-            log_dir=os.path.join(LOG_DIR, run_id),
-            histogram_freq=1
-        ),
+        callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.4, patience=3, min_lr=1e-7),
     ]
+    return model.fit(train_ds, validation_data=val_ds, epochs=epochs, callbacks=cbs, verbose=1)
 
 
-def phase1_train(model, train_ds, val_ds, epochs, run_id):
-    """Phase 1: train only the classification head (backbone frozen)."""
-    print("\n── Phase 1: Training classification head (backbone frozen) ──\n")
-    model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=1e-3),
-        loss="binary_crossentropy",
-        metrics=[
-            "accuracy",
-            keras.metrics.AUC(name="auc"),
-            keras.metrics.Precision(name="precision"),
-            keras.metrics.Recall(name="recall"),
-        ]
-    )
-    history = model.fit(
-        train_ds,
-        validation_data=val_ds,
-        epochs=epochs,
-        callbacks=get_callbacks(f"{run_id}_phase1"),
-        verbose=1
-    )
-    return history
-
-
-def phase2_finetune(model, base_model, train_ds, val_ds, epochs, run_id):
-    """
-    Phase 2 (optional): unfreeze top N layers of MobileNetV2 and fine-tune
-    with a very low learning rate so pretrained weights are not destroyed.
-    """
-    print("\n── Phase 2: Fine-tuning top layers of MobileNetV2 ──\n")
-
-    # Unfreeze the last 30 layers of the backbone
-    base_model.trainable = True
-    for layer in base_model.layers[:-30]:
-        layer.trainable = False
-
-    model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=1e-5),  # 100× lower LR
-        loss="binary_crossentropy",
-        metrics=[
-            "accuracy",
-            keras.metrics.AUC(name="auc"),
-            keras.metrics.Precision(name="precision"),
-            keras.metrics.Recall(name="recall"),
-        ]
-    )
-    history = model.fit(
-        train_ds,
-        validation_data=val_ds,
-        epochs=epochs,
-        callbacks=get_callbacks(f"{run_id}_phase2"),
-        verbose=1
-    )
-    return history
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 5.  EVALUATION
-# ══════════════════════════════════════════════════════════════════════════════
-
-def evaluate_model(model, test_ds, test_labels, save_plots: bool, run_id: str):
-    print("\n── Evaluation on held-out test set ──\n")
-
-    # Raw predictions
-    y_prob = model.predict(test_ds, verbose=0).flatten()
-    y_pred = (y_prob >= 0.5).astype(int)
-
-    # Classification report
-    report = classification_report(
-        test_labels, y_pred,
-        target_names=CLASS_NAMES,
-        digits=4
-    )
-    print(report)
-
-    auc = roc_auc_score(test_labels, y_prob)
-    print(f"   ROC-AUC : {auc:.4f}")
-
-    # Save report to file
-    report_path = os.path.join(PLOTS_DIR, f"{run_id}_report.txt")
-    with open(report_path, "w") as f:
-        f.write(report)
-        f.write(f"\nROC-AUC: {auc:.4f}\n")
-    print(f"\n   Report saved → {report_path}")
-
-    if save_plots:
-        _plot_confusion_matrix(test_labels, y_pred, run_id)
-        _plot_roc_curve(test_labels, y_prob, auc, run_id)
-
-    return auc
-
-
-def _plot_confusion_matrix(y_true, y_pred, run_id):
-    cm = confusion_matrix(y_true, y_pred)
-    fig, ax = plt.subplots(figsize=(5, 4))
-    sns.heatmap(
-        cm, annot=True, fmt="d", cmap="Blues",
-        xticklabels=CLASS_NAMES, yticklabels=CLASS_NAMES, ax=ax
-    )
-    ax.set_title("Confusion Matrix", fontsize=13, fontweight="bold")
-    ax.set_ylabel("True Label")
-    ax.set_xlabel("Predicted Label")
-    path = os.path.join(PLOTS_DIR, f"{run_id}_confusion_matrix.png")
-    plt.tight_layout()
-    plt.savefig(path, dpi=150)
-    plt.close()
-    print(f"   Confusion matrix saved → {path}")
-
-
-def _plot_roc_curve(y_true, y_prob, auc, run_id):
-    fpr, tpr, _ = roc_curve(y_true, y_prob)
-    fig, ax = plt.subplots(figsize=(5, 4))
-    ax.plot(fpr, tpr, color="#E63946", lw=2, label=f"AUC = {auc:.4f}")
-    ax.plot([0, 1], [0, 1], color="gray", linestyle="--", lw=1)
-    ax.set_xlabel("False Positive Rate")
-    ax.set_ylabel("True Positive Rate")
-    ax.set_title("ROC Curve", fontsize=13, fontweight="bold")
-    ax.legend(loc="lower right")
-    path = os.path.join(PLOTS_DIR, f"{run_id}_roc_curve.png")
-    plt.tight_layout()
-    plt.savefig(path, dpi=150)
-    plt.close()
-    print(f"   ROC curve saved → {path}")
-
-
-def _plot_training_history(history_list, run_id):
-    """Combine Phase 1 (+ optional Phase 2) training curves."""
-    merged = {"accuracy": [], "val_accuracy": [],
-              "loss":     [], "val_loss":     [],
-              "auc":      [], "val_auc":      []}
-    for h in history_list:
-        for key in merged:
-            if key in h.history:
-                merged[key].extend(h.history[key])
-
-    epochs = range(1, len(merged["loss"]) + 1)
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-
-    for ax, (train_key, val_key, title) in zip(axes, [
-        ("loss",     "val_loss",     "Loss"),
-        ("accuracy", "val_accuracy", "Accuracy"),
-        ("auc",      "val_auc",      "AUC"),
-    ]):
-        ax.plot(epochs, merged[train_key], label="Train",  color="#457B9D")
-        ax.plot(epochs, merged[val_key],   label="Val",    color="#E63946")
-        ax.set_title(title, fontweight="bold")
-        ax.set_xlabel("Epoch")
-        ax.legend()
-        ax.grid(alpha=0.3)
-
-    plt.suptitle("Training History", fontsize=14, fontweight="bold", y=1.02)
-    path = os.path.join(PLOTS_DIR, f"{run_id}_training_history.png")
-    plt.tight_layout()
-    plt.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"   Training history saved → {path}")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 6.  MODEL EXPORT
-# ══════════════════════════════════════════════════════════════════════════════
-
-def export_model(model, run_id: str):
-    """
-    Export in two formats:
-      1. TF SavedModel  – recommended for backend (TF Serving / tf.saved_model.load)
-      2. .h5 file       – single-file Keras backup
-    """
-    # TF SavedModel
-    saved_path = os.path.join(SAVEDMODEL_DIR, run_id)
-    model.export(saved_path)
-    print(f"\n✅  SavedModel exported → {saved_path}/")
-
-    # .h5 backup
-    h5_path = os.path.join("model", f"{run_id}.h5")
-    model.save(h5_path)
-    print(f"✅  Keras .h5 backup   → {h5_path}")
-
-    # Save class index mapping for backend use
-    import json
-    class_index = {str(i): name for i, name in enumerate(CLASS_NAMES)}
-    idx_path = os.path.join("model", "class_indices.json")
-    with open(idx_path, "w") as f:
-        json.dump(class_index, f, indent=2)
-    print(f"✅  Class index map    → {idx_path}")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 7.  MAIN ENTRY POINT
-# ══════════════════════════════════════════════════════════════════════════════
-
-def main(args):
-    run_id = f"counterfeit_mobilenetv2_e{args.epochs}_b{args.batch}"
-    img_size = args.img_size
-
-    print("\n" + "=" * 60)
-    print("  COUNTERFEIT MEDICINE DETECTION — TRAINING PIPELINE")
-    print("=" * 60)
-    print(f"  Image size : {img_size}×{img_size}")
-    print(f"  Batch size : {args.batch}")
-    print(f"  Epochs     : {args.epochs}  (Phase 1)")
-    print(f"  Fine-tune  : {'Yes — Phase 2 enabled' if args.fine_tune else 'No'}")
-    print(f"  Run ID     : {run_id}")
-    print("=" * 60)
-
-    # ── 1. Load data ───────────────────────────────────────────────────────
-    print("\n[1/6] Loading image paths ...")
-    paths, labels = load_paths_and_labels(GENUINE_DIR, FAKE_DIR)
-    print(f"      Total: {len(paths)} images across {len(CLASS_NAMES)} classes")
-
-    # ── 2. Split: 70% train / 15% val / 15% test ──────────────────────────
-    print("\n[2/6] Splitting dataset (70/15/15) ...")
-    X_train, X_tmp, y_train, y_tmp = train_test_split(
+def train_stage(
+    stage_name: str,
+    dir_a: str,
+    dir_b: str,
+    output_path: str,
+    img_size: int,
+    batch: int,
+    epochs: int,
+    backbone: str,
+    early_stop_patience: int = 5,
+    max_samples: int = 0,
+):
+    print(f"\n===== {stage_name} =====")
+    paths, labels = collect_paths(dir_a, dir_b)
+    paths, labels = stratified_cap(paths, labels, max_samples=max_samples)
+    if max_samples > 0:
+        print(f"Capped dataset to {len(paths)} samples for faster training.")
+    x_train, x_tmp, y_train, y_tmp = train_test_split(
         paths, labels, test_size=0.30, stratify=labels, random_state=SEED
     )
-    X_val, X_test, y_val, y_test = train_test_split(
-        X_tmp, y_tmp, test_size=0.50, stratify=y_tmp, random_state=SEED
+    x_val, x_test, y_val, y_test = train_test_split(
+        x_tmp, y_tmp, test_size=0.50, stratify=y_tmp, random_state=SEED
     )
-    print(f"      Train : {len(X_train)}   Val : {len(X_val)}   Test : {len(X_test)}")
 
-    # ── 3. Build tf.data pipelines ─────────────────────────────────────────
-    print("\n[3/6] Building tf.data pipelines ...")
-    train_ds = make_tf_dataset(X_train, y_train, img_size, args.batch, shuffle=True)
-    val_ds   = make_tf_dataset(X_val,   y_val,   img_size, args.batch)
-    test_ds  = make_tf_dataset(X_test,  y_test,  img_size, args.batch)
+    train_ds = make_dataset(x_train, y_train, img_size, batch, training=True)
+    val_ds = make_dataset(x_val, y_val, img_size, batch)
+    test_ds = make_dataset(x_test, y_test, img_size, batch)
 
-    # ── 4. Build model ─────────────────────────────────────────────────────
-    print("\n[4/6] Building MobileNetV2 model ...")
-    model, base_model = build_model(img_size)
-    model.summary(line_length=80)
+    model = build_binary_model(img_size, backbone=backbone)
+    fit_one_model(model, train_ds, val_ds, epochs, early_stop_patience=early_stop_patience)
 
-    # ── 5. Train ───────────────────────────────────────────────────────────
-    print("\n[5/6] Training ...")
-    histories = []
+    loss, acc, auc = model.evaluate(test_ds, verbose=0)
+    print(f"{stage_name} test -> loss={loss:.4f}, acc={acc:.4f}, auc={auc:.4f}")
+    model.save(output_path)
+    print(f"Saved model: {output_path}")
 
-    h1 = phase1_train(model, train_ds, val_ds, args.epochs, run_id)
-    histories.append(h1)
 
-    if args.fine_tune:
-        ft_epochs = max(10, args.epochs // 3)
-        h2 = phase2_finetune(model, base_model, train_ds, val_ds, ft_epochs, run_id)
-        histories.append(h2)
+def main():
+    parser = argparse.ArgumentParser(description="Train two-stage medicine pipeline.")
+    parser.add_argument("--img-size", type=int, default=160)
+    parser.add_argument("--batch", type=int, default=32)
+    parser.add_argument("--epochs-stage1", type=int, default=4)
+    parser.add_argument("--epochs-stage2", type=int, default=25)
+    parser.add_argument("--patience-stage1", type=int, default=2)
+    parser.add_argument("--patience-stage2", type=int, default=5)
+    parser.add_argument(
+        "--max-samples-stage1",
+        type=int,
+        default=6000,
+        help="Cap Stage 1 images for faster runs. Set 0 to use all data.",
+    )
+    parser.add_argument("--backbone", choices=["mobilenet", "resnet"], default="mobilenet")
+    parser.add_argument("--skip-stage1", action="store_true", help="Skip Stage 1 if non_medicine data is not ready.")
+    parser.add_argument("--skip-stage2", action="store_true", help="Train only Stage 1 and skip Stage 2.")
+    parser.add_argument(
+        "--force-stage2",
+        action="store_true",
+        help="Retrain Stage 2 even if model/stage2_authenticity_classifier.h5 already exists.",
+    )
+    args = parser.parse_args()
 
-    if not args.no_plot:
-        _plot_training_history(histories, run_id)
+    bootstrap_medicine_folder()
 
-    # ── 6. Evaluate & export ───────────────────────────────────────────────
-    print("\n[6/6] Evaluating and exporting ...")
-    evaluate_model(model, test_ds, y_test, not args.no_plot, run_id)
-    export_model(model, run_id)
+    can_train_stage1 = (
+        os.path.isdir("dataset/medicine")
+        and os.path.isdir("dataset/non_medicine")
+        and _count_images("dataset/medicine") > 0
+        and _count_images("dataset/non_medicine") > 0
+        and not args.skip_stage1
+    )
+    if can_train_stage1:
+        train_stage(
+            stage_name="Stage 1 (medicine vs non_medicine)",
+            dir_a="dataset/medicine",
+            dir_b="dataset/non_medicine",
+            output_path="model/stage1_medicine_detector.h5",
+            img_size=args.img_size,
+            batch=args.batch,
+            epochs=args.epochs_stage1,
+            backbone=args.backbone,
+            early_stop_patience=args.patience_stage1,
+            max_samples=args.max_samples_stage1,
+        )
+    else:
+        print("\nSkipping Stage 1 training.")
+        print("Reason: dataset/non_medicine is missing/empty or --skip-stage1 used.")
+        print("Add non-medicine images to dataset/non_medicine, then re-run train.py for full two-stage support.")
 
-    print("\n" + "=" * 60)
-    print("  TRAINING COMPLETE")
-    print("=" * 60)
-    print(f"""
-  Model files:
-    SavedModel  →  model/saved_model/{run_id}/
-    Keras .h5   →  model/{run_id}.h5
-    Class map   →  model/class_indices.json
+    stage2_model_path = "model/stage2_authenticity_classifier.h5"
+    if args.skip_stage2:
+        print("\nSkipping Stage 2 training.")
+        print("Reason: --skip-stage2 used.")
+    elif os.path.exists(stage2_model_path) and not args.force_stage2:
+        print(f"\nSkipping Stage 2 training.")
+        print(f"Reason: existing model found at {stage2_model_path}.")
+        print("Use --force-stage2 to retrain this stage.")
+    else:
+        train_stage(
+            stage_name="Stage 2 (genuine vs fake)",
+            dir_a="dataset/genuine",
+            dir_b="dataset/fake",
+            output_path=stage2_model_path,
+            img_size=args.img_size,
+            batch=args.batch,
+            epochs=args.epochs_stage2,
+            backbone=args.backbone,
+            early_stop_patience=args.patience_stage2,
+            max_samples=0,
+        )
 
-  To use in your Flask/FastAPI backend:
-    import tensorflow as tf
-    model = tf.saved_model.load("model/saved_model/{run_id}")
-    # OR
-    model = tf.keras.models.load_model("model/{run_id}.h5")
-
-  To view training curves:
-    tensorboard --logdir logs/training
-""")
+    print("\nTraining complete.")
+    print("Generated models:")
+    print("- model/stage1_medicine_detector.h5")
+    print("- model/stage2_authenticity_classifier.h5")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Train the counterfeit medicine detection model."
-    )
-    parser.add_argument("--epochs",    type=int,  default=30,
-                        help="Number of training epochs (Phase 1)")
-    parser.add_argument("--batch",     type=int,  default=32,
-                        help="Batch size")
-    parser.add_argument("--img-size",  type=int,  default=224,
-                        help="Image input size (default: 224)")
-    parser.add_argument("--fine-tune", action="store_true",
-                        help="Enable Phase 2 fine-tuning of top MobileNetV2 layers")
-    parser.add_argument("--no-plot",   action="store_true",
-                        help="Skip saving evaluation plots")
-    args = parser.parse_args()
-    main(args)
+    main()

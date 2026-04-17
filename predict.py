@@ -1,271 +1,129 @@
 """
-predict.py
-----------
-Loads the trained model and runs inference on a single image.
-This is the function your Flask / FastAPI backend will import.
-
-v2 Changes:
-  - Confidence threshold gate: below 65% returns "unverified" instead of
-    a misleading genuine/fake label
-  - Image relevance check: detects non-packaging images using pixel
-    variance and color distribution heuristics
-  - Four result states: genuine / suspicious / unverified / not_medicine
-
-Usage (standalone test):
-    python predict.py --image path/to/medicine.jpg --model model/yourmodel.h5
-
-Usage (import in backend):
-    from predict import MedicineVerifier
-    verifier = MedicineVerifier("model/counterfeit_mobilenetv2_e30_b32.h5")
-    result   = verifier.predict("uploads/scan.jpg")
+Two-stage inference:
+1) Medicine detector (medicine vs non_medicine)
+2) Authenticity classifier (genuine vs fake)
 """
 
-import os
 import argparse
-import json
+import os
+from typing import Dict, Tuple
+
 import numpy as np
 import tensorflow as tf
-from PIL import Image, ImageStat
+from PIL import Image
 
-IMG_SIZE = 224
+IMG_SIZE = 160
+MEDICINE_THRESHOLD = 0.70
+AUTH_THRESHOLD = 0.70
 
-# ── Confidence thresholds ─────────────────────────────────────────────────────
-GENUINE_LOW_THRESHOLD      = 0.90   # ≥ 90% genuine  → LOW risk
-GENUINE_MODERATE_THRESHOLD = 0.70   # ≥ 70% genuine  → MODERATE risk
-CONFIDENCE_MIN_THRESHOLD   = 0.65   # < 65% either   → UNVERIFIED
-FAKE_HIGH_THRESHOLD        = 0.75   # ≥ 75% fake     → HIGH risk
 
-# ── Image relevance thresholds ────────────────────────────────────────────────
-# Medicine packaging tends to have:
-#   - Moderate variance (not too uniform, not too chaotic)
-#   - Visible text/edges → decent edge energy
-MIN_VARIANCE   = 200    # Too uniform = blank wall, plain surface, etc.
-MAX_VARIANCE   = 6000   # Too chaotic = random scene, no clear subject
-MIN_BRIGHTNESS = 30     # Too dark to see anything
-MAX_BRIGHTNESS = 245    # Completely washed out
+def _load_image(image_path: str, img_size: int = IMG_SIZE) -> np.ndarray:
+    img = Image.open(image_path).convert("RGB")
+    img = img.resize((img_size, img_size), Image.LANCZOS)
+    arr = np.asarray(img, dtype=np.float32) / 255.0
+    return np.expand_dims(arr, axis=0)
 
 
 class MedicineVerifier:
+    def __init__(
+        self,
+        medicine_model_path: str = "model/stage1_medicine_detector.h5",
+        authenticity_model_path: str = "model/stage2_authenticity_classifier.h5",
+        medicine_threshold: float = MEDICINE_THRESHOLD,
+        authenticity_threshold: float = AUTH_THRESHOLD,
+    ):
+        self.has_stage1 = bool(medicine_model_path) and os.path.exists(medicine_model_path)
+        if not os.path.exists(authenticity_model_path):
+            raise FileNotFoundError(
+                f"Stage 2 model not found: {authenticity_model_path}. Train Stage 2 first."
+            )
 
-    def __init__(self, model_path: str,
-                 class_index_path: str = "model/class_indices.json"):
-        print(f"Loading model from: {model_path}")
-        self.model = tf.keras.models.load_model(model_path, compile=False)
+        self.medicine_model = None
+        if self.has_stage1:
+            self.medicine_model = tf.keras.models.load_model(medicine_model_path, compile=False)
+        self.auth_model = tf.keras.models.load_model(authenticity_model_path, compile=False)
+        # Keep preprocessing aligned with model input resolution.
+        self.img_size = int(self.auth_model.input_shape[1]) if self.auth_model.input_shape[1] else IMG_SIZE
+        self.medicine_threshold = medicine_threshold
+        self.authenticity_threshold = authenticity_threshold
 
-        if os.path.exists(class_index_path):
-            with open(class_index_path) as f:
-                self.class_index = json.load(f)
+    def _stage1_validate(self, x: np.ndarray) -> Tuple[bool, float]:
+        raw = float(self.medicine_model.predict(x, verbose=0)[0][0])
+        prob_medicine = 1.0 - raw
+        is_medicine = prob_medicine >= self.medicine_threshold
+        return is_medicine, prob_medicine
+
+    def _stage2_authenticity(self, x: np.ndarray) -> Tuple[str, float, float]:
+        raw = float(self.auth_model.predict(x, verbose=0)[0][0])
+        if raw >= 0.5:
+            label = "fake"
+            confidence = raw
         else:
-            self.class_index = {"0": "genuine", "1": "fake"}
+            label = "genuine"
+            confidence = 1.0 - raw
+        return label, confidence, raw
 
-        print("Model ready.")
-
-    # ── Preprocessing ──────────────────────────────────────────────────────────
-
-    def _preprocess(self, image_path: str) -> tuple:
-        """
-        Load and resize image. Returns (tensor, pil_image).
-        PIL image is used for the relevance check.
-        """
-        img = Image.open(image_path).convert("RGB")
-        img_resized = img.resize((IMG_SIZE, IMG_SIZE), Image.LANCZOS)
-        arr = np.array(img_resized, dtype=np.float32) / 255.0
-        return np.expand_dims(arr, axis=0), img
-
-    # ── Image relevance check ──────────────────────────────────────────────────
-
-    def _is_likely_medicine_image(self, img: Image.Image) -> tuple:
-        """
-        Quick sanity check — does this image look like it could be
-        medicine packaging at all?
-
-        Returns (is_valid: bool, reason: str)
-
-        Checks:
-          1. Brightness — too dark or too bright → reject
-          2. Variance   — too uniform (blank wall) or too chaotic
-                          (complex natural scene) → reject
-          3. Aspect ratio — extremely tall/wide images are unlikely
-                            to be medicine packaging photos
-        """
-        # Resize to small for fast analysis
-        small = img.resize((64, 64))
-        arr   = np.array(small, dtype=np.float32)
-
-        # 1. Brightness check
-        brightness = arr.mean()
-        if brightness < MIN_BRIGHTNESS:
-            return False, "Image is too dark to analyse"
-        if brightness > MAX_BRIGHTNESS:
-            return False, "Image is too bright or washed out"
-
-        # 2. Variance check
-        variance = arr.var()
-        if variance < MIN_VARIANCE:
-            return False, "Image appears to be a blank or uniform surface — not medicine packaging"
-        if variance > MAX_VARIANCE:
-            return False, "Image appears to be a complex scene — please photograph only the medicine packaging"
-
-        # 3. Aspect ratio check
-        w, h = img.size
-        ratio = max(w, h) / min(w, h)
-        if ratio > 5.0:
-            return False, "Unusual image dimensions — please take a standard photo of the packaging"
-
-        return True, "ok"
-
-    # ── Risk level ─────────────────────────────────────────────────────────────
-
-    def _risk_level(self, confidence: float, label: str) -> str:
-        if label == "genuine":
-            if confidence >= GENUINE_LOW_THRESHOLD:
-                return "low"
-            elif confidence >= GENUINE_MODERATE_THRESHOLD:
-                return "moderate"
-            else:
-                return "high"
-        else:
-            if confidence >= FAKE_HIGH_THRESHOLD:
-                return "high"
-            else:
-                return "moderate"
-
-    # ── Main predict ───────────────────────────────────────────────────────────
-
-    def predict(self, image_path: str) -> dict:
-        """
-        Run inference on a single image.
-
-        Returns dict with keys:
-            status      : "genuine" | "suspicious" | "unverified" | "not_medicine"
-            label       : human readable label
-            confidence  : float 0-1
-            risk_level  : "low" | "moderate" | "high" | "unknown"
-            raw_score   : raw sigmoid output
-            message     : plain English explanation for the user
-        """
+    def predict(self, image_path: str) -> Dict:
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Image not found: {image_path}")
 
-        # ── Step 1: Load image ─────────────────────────────────────────────────
-        x, pil_img = self._preprocess(image_path)
+        x = _load_image(image_path, img_size=self.img_size)
 
-        # ── Step 2: Relevance check ────────────────────────────────────────────
-        is_valid, reason = self._is_likely_medicine_image(pil_img)
-        if not is_valid:
-            return {
-                "status":     "not_medicine",
-                "label":      "Not Medicine Packaging",
-                "confidence": 0.0,
-                "risk_level": "unknown",
-                "raw_score":  0.0,
-                "message":    f"{reason}. Please upload a clear photo of the medicine box, strip, or bottle label."
-            }
-
-        # ── Step 3: Model inference ────────────────────────────────────────────
-        raw_score = float(self.model.predict(x, verbose=0)[0][0])
-
-        if raw_score >= 0.5:
-            label      = "fake"
-            confidence = raw_score
+        if self.has_stage1:
+            is_medicine, medicine_conf = self._stage1_validate(x)
+            if not is_medicine:
+                return {
+                    "status": "not_medicine",
+                    "label": "Not a medicine image",
+                    "message": "Stage 1 rejected the image as non-medicine.",
+                    "medicine_confidence": round(medicine_conf, 4),
+                    "confidence": round(medicine_conf, 4),
+                    "risk_level": "unknown",
+                    "raw_score": 0.0,
+                }
         else:
-            label      = "genuine"
-            confidence = 1.0 - raw_score
+            medicine_conf = 1.0
 
-        # ── Step 4: Confidence gate ────────────────────────────────────────────
-        # If model is not confident enough either way → unverified
-        if confidence < CONFIDENCE_MIN_THRESHOLD:
+        label, auth_conf, raw = self._stage2_authenticity(x)
+        if auth_conf < self.authenticity_threshold:
             return {
-                "status":     "unverified",
-                "label":      "Unable to Verify",
-                "confidence": round(confidence, 4),
+                "status": "unverified",
+                "label": "Unverified result",
+                "message": (
+                    "Stage 2 confidence is below threshold. "
+                    "Please upload a clearer medicine image."
+                ),
+                "medicine_confidence": round(medicine_conf, 4),
+                "confidence": round(auth_conf, 4),
+                "raw_score": round(raw, 4),
                 "risk_level": "moderate",
-                "raw_score":  round(raw_score, 4),
-                "message":    (
-                    "The AI could not confidently verify this medicine. "
-                    "This may be because the medicine is not in our training database yet, "
-                    "the photo quality is low, or the packaging is partially obscured. "
-                    "Please verify with your pharmacist."
-                )
             }
-
-        # ── Step 5: Normal result ──────────────────────────────────────────────
-        risk   = self._risk_level(confidence, label)
-        status = "genuine" if label == "genuine" else "suspicious"
-
-        messages = {
-            ("genuine", "low"): (
-                "Packaging visual patterns match genuine medicine characteristics. "
-                "Appears authentic. Always check the expiry date and tamper-evident seal before use."
-            ),
-            ("genuine", "moderate"): (
-                "Packaging appears genuine but confidence is moderate. "
-                "This medicine may not be in our full training database yet. "
-                "Verify the batch number, expiry date, and seal with your pharmacist."
-            ),
-            ("genuine", "high"): (
-                "The model leaned towards genuine but with low confidence. "
-                "Exercise caution. Have this medicine verified by a pharmacist before use."
-            ),
-            ("suspicious", "moderate"): (
-                "Some packaging inconsistencies were detected. "
-                "This could be a counterfeit product or a medicine variant not yet in our database. "
-                "Do not consume without pharmacist verification."
-            ),
-            ("suspicious", "high"): (
-                "High likelihood of counterfeit packaging detected. "
-                "Do NOT consume this medicine. Return it to the pharmacy "
-                "and report to your nearest drug regulatory authority immediately."
-            ),
-        }
-
-        message = messages.get(
-            (status, risk),
-            "Please consult your pharmacist for verification."
-        )
 
         return {
-            "status":     status,
-            "label":      "Genuine Medicine" if status == "genuine" else "Suspicious Package",
-            "confidence": round(confidence, 4),
-            "risk_level": risk,
-            "raw_score":  round(raw_score, 4),
-            "message":    message
+            "status": "genuine" if label == "genuine" else "suspicious",
+            "label": "Genuine" if label == "genuine" else "Suspicious",
+            "message": "Prediction completed." if not self.has_stage1 else "Two-stage prediction completed.",
+            "medicine_confidence": round(medicine_conf, 4),
+            "confidence": round(auth_conf, 4),
+            "raw_score": round(raw, 4),
+            "risk_level": "low" if label == "genuine" and auth_conf >= 0.85 else ("moderate" if label == "genuine" else "high"),
         }
-
-
-# ── Standalone test ───────────────────────────────────────────────────────────
-
-def _find_latest_h5():
-    h5_dir = "model"
-    if not os.path.isdir(h5_dir):
-        return None
-    files = [f for f in os.listdir(h5_dir) if f.endswith(".h5")]
-    if not files:
-        return None
-    files.sort(reverse=True)
-    return os.path.join(h5_dir, files[0])
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--image",  required=True)
-    parser.add_argument("--model",  default=None)
+    parser = argparse.ArgumentParser(description="Two-stage medicine inference.")
+    parser.add_argument("--image", required=True, help="Path to input image.")
+    parser.add_argument("--medicine-model", default="model/stage1_medicine_detector.h5")
+    parser.add_argument("--auth-model", default="model/stage2_authenticity_classifier.h5")
+    parser.add_argument("--medicine-threshold", type=float, default=MEDICINE_THRESHOLD)
+    parser.add_argument("--auth-threshold", type=float, default=AUTH_THRESHOLD)
     args = parser.parse_args()
 
-    model_path = args.model or _find_latest_h5()
-    if not model_path:
-        print("❌  No model found. Run train.py first.")
-        exit(1)
-
-    verifier = MedicineVerifier(model_path)
-    result   = verifier.predict(args.image)
-
-    print("\n── Prediction Result ─────────────────────────────────")
-    print(f"  Image      : {args.image}")
-    print(f"  Status     : {result['status'].upper()}")
-    print(f"  Label      : {result['label']}")
-    print(f"  Confidence : {result['confidence'] * 100:.1f}%")
-    print(f"  Risk Level : {result['risk_level'].upper()}")
-    print(f"  Message    : {result['message']}")
-    print("──────────────────────────────────────────────────────\n")
+    verifier = MedicineVerifier(
+        medicine_model_path=args.medicine_model,
+        authenticity_model_path=args.auth_model,
+        medicine_threshold=args.medicine_threshold,
+        authenticity_threshold=args.auth_threshold,
+    )
+    result = verifier.predict(args.image)
+    print(result)
