@@ -204,9 +204,19 @@ def main():
     parser.add_argument("--img-size", type=int, default=160)
     parser.add_argument("--batch", type=int, default=32)
     parser.add_argument("--epochs-stage1", type=int, default=4)
-    parser.add_argument("--epochs-stage2", type=int, default=25)
+    parser.add_argument(
+        "--epochs-stage2",
+        type=int,
+        default=10,
+        help="Max epochs for genuine vs fake (Stage 2). Lower default for faster retraining; raise if you need more quality.",
+    )
     parser.add_argument("--patience-stage1", type=int, default=2)
-    parser.add_argument("--patience-stage2", type=int, default=5)
+    parser.add_argument(
+        "--patience-stage2",
+        type=int,
+        default=3,
+        help="EarlyStopping patience on val_auc for Stage 2 (stops before --epochs-stage2 if plateau).",
+    )
     parser.add_argument(
         "--max-samples-stage1",
         type=int,

@@ -13,9 +13,13 @@ Distortions applied (individually and in combination):
   5. Edge degradation   – border thickness inconsistency
   6. JPEG compression   – reproduction-quality loss artefacts
   7. Colour channel swap– subtle hue inversion in one channel
+  8. Synthetic label text – bright red EXP/BATCH lines mimicking pasted or
+     digitally added text on real boxes (common counterfeit / tamper cue)
 
-Each genuine image produces N_FAKES_PER_IMAGE fake variants so that
-the genuine / fake class sizes stay balanced.
+Each genuine image produces N_FAKES_PER_IMAGE fake variant(s). For N_FAKES=1,
+each output image is either (a) classic distortions plus synthetic EXP/BATCH
+text, or (b) tamper-focused (mostly overlay, like “same photo + red expiry”),
+chosen at random so both cues are seen without doubling the fake class size.
 
 Usage:
     pip install Pillow numpy opencv-python
@@ -26,13 +30,13 @@ import os
 import random
 import argparse
 import numpy as np
-from PIL import Image, ImageFilter, ImageEnhance, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 import cv2
 
 # ── Config ────────────────────────────────────────────────────────────────────
 GENUINE_DIR     = "dataset/genuine"
 FAKE_DIR        = "dataset/fake"
-N_FAKES_PER_IMAGE = 1       # How many fake variants to make per genuine image
+N_FAKES_PER_IMAGE = 1       # One synthetic fake per genuine; type alternates (see loop)
 TARGET_SIZE       = (224, 224)  # Must match model input size
 SEED              = 42
 VALID_EXTS        = {".jpg", ".jpeg", ".png", ".webp"}
@@ -133,6 +137,56 @@ def apply_channel_inversion(img: Image.Image) -> Image.Image:
     return Image.fromarray(arr)
 
 
+def _load_sans_font(size: int):
+    """Best-effort readable sans font for synthetic stamp text."""
+    candidates = [
+        os.path.join(os.environ.get("WINDIR", ""), "Fonts", "arial.ttf"),
+        os.path.join(os.environ.get("WINDIR", ""), "Fonts", "calibri.ttf"),
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ]
+    for path in candidates:
+        if path and os.path.isfile(path):
+            try:
+                return ImageFont.truetype(path, size=max(10, size))
+            except OSError:
+                continue
+    return ImageFont.load_default()
+
+
+def apply_expiry_text_overlay(img: Image.Image) -> Image.Image:
+    """
+    Simulate pasted / digitally added expiry or batch lines (high-contrast red),
+    often misaligned with original print — a common counterfeit cue.
+    """
+    out = img.copy()
+    w, h = out.size
+    draw = ImageDraw.Draw(out)
+    font_size = max(12, min(h // 14, w // 12))
+    font = _load_sans_font(font_size)
+
+    month = random.randint(1, 12)
+    year = random.choice([1998, 1999, 2000, 2001, 2002, 2003])
+    exp_line = f"EXP: {month:02d}/{year}"
+    batch_line = f"BATCH: {random.randint(10000, 99999)}"
+
+    # Lower band where expiry often appears; randomize so the model generalizes
+    x0 = random.randint(max(4, w // 20), w // 2)
+    y0 = random.randint(int(h * 0.52), int(h * 0.82))
+    red = (random.randint(200, 255), random.randint(10, 60), random.randint(20, 70))
+
+    for dy, line in enumerate((exp_line, batch_line)):
+        y = y0 + dy * (font_size + random.randint(2, 8))
+        if y >= h - 4:
+            break
+        # Slight outline so text stays visible on varied backgrounds
+        for dx, dy2 in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            draw.text((x0 + dx, y + dy2), line, fill=(20, 20, 20), font=font)
+        draw.text((x0, y), line, fill=red, font=font)
+
+    return out
+
+
 # ── Distortion registry ───────────────────────────────────────────────────────
 ALL_DISTORTIONS = [
     apply_logo_blur,
@@ -145,10 +199,9 @@ ALL_DISTORTIONS = [
 ]
 
 
-def make_fake(img: Image.Image, n_distortions: int = None) -> Image.Image:
+def make_fake_distortion_stack(img: Image.Image, n_distortions: int = None) -> Image.Image:
     """
-    Apply a random combination of distortions to an image.
-    n_distortions: how many to apply (default: 2–4 randomly).
+    Apply a random combination of classic packaging distortions (no text overlay).
     """
     if n_distortions is None:
         n_distortions = random.randint(2, 4)
@@ -161,6 +214,46 @@ def make_fake(img: Image.Image, n_distortions: int = None) -> Image.Image:
         except Exception as e:
             print(f"   ⚠  Distortion {fn.__name__} skipped: {e}")
     return result
+
+
+def make_fake_distortion_plus_overlay(img: Image.Image) -> Image.Image:
+    """Classic counterfeit artefacts + synthetic label lines (common judge/demo case)."""
+    result = make_fake_distortion_stack(img)
+    try:
+        result = apply_expiry_text_overlay(result)
+    except Exception as e:
+        print(f"   ⚠  Expiry overlay skipped: {e}")
+    return result
+
+
+def make_fake_tamper_overlay(img: Image.Image) -> Image.Image:
+    """
+    Same packaging photo with digitally added expiry/batch text — minimal global blur/skew.
+    Matches “photograph unchanged + red EXP added” tampering.
+    """
+    result = img.copy()
+    try:
+        result = apply_expiry_text_overlay(result)
+    except Exception as e:
+        print(f"   ⚠  Expiry overlay skipped: {e}")
+        return make_fake_distortion_stack(img)
+    if random.random() < 0.45:
+        try:
+            result = apply_brightness_noise(result)
+        except Exception:
+            pass
+    if random.random() < 0.3:
+        try:
+            result = apply_jpeg_compression(result)
+        except Exception:
+            pass
+    return result
+
+
+def make_fake(img: Image.Image, n_distortions: int = None) -> Image.Image:
+    """Backward-compatible: distortions then expiry overlay."""
+    del n_distortions  # unused; kept for API compatibility
+    return make_fake_distortion_plus_overlay(img)
 
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
@@ -194,9 +287,22 @@ def generate(genuine_dir: str, fake_dir: str, n_fakes: int):
         stem, _ = os.path.splitext(filename)
 
         for variant in range(1, n_fakes + 1):
-            fake_img  = make_fake(img)
-            out_name  = f"fake_{stem}_v{variant:02d}.jpg"
-            out_path  = os.path.join(fake_dir, out_name)
+            if n_fakes >= 2:
+                if variant >= 2:
+                    fake_img = make_fake_tamper_overlay(img)
+                    tag = f"v{variant:02d}_tamper"
+                else:
+                    fake_img = make_fake_distortion_plus_overlay(img)
+                    tag = f"v{variant:02d}"
+            else:
+                if random.random() < 0.5:
+                    fake_img = make_fake_tamper_overlay(img)
+                    tag = "v01_tamper"
+                else:
+                    fake_img = make_fake_distortion_plus_overlay(img)
+                    tag = "v01"
+            out_name = f"fake_{stem}_{tag}.jpg"
+            out_path = os.path.join(fake_dir, out_name)
             fake_img.save(out_path, "JPEG", quality=92)
             total_generated += 1
 

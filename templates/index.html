@@ -797,6 +797,61 @@
   .unverified .advisory-box,
   .not_medicine .advisory-box { border-left-color: var(--amber); color: #78350f; }
 
+  /* MediSecure / blockchain notice (below scanned image, above What to do) */
+  .blockchain-card {
+    margin: 0 0 16px 0;
+    padding: 14px 16px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    line-height: 1.6;
+    border: 1px solid var(--border-mid);
+    background: linear-gradient(135deg, rgba(37,99,235,0.06) 0%, rgba(255,255,255,0.85) 100%);
+  }
+  .blockchain-card.stored {
+    border-color: #93c5fd;
+    background: linear-gradient(135deg, rgba(37,99,235,0.1) 0%, #eff4ff 100%);
+  }
+  .blockchain-card.offline {
+    border-color: var(--border-mid);
+    background: rgba(248,250,252,0.95);
+  }
+  .blockchain-card-title {
+    font-weight: 700;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--blue);
+    margin-bottom: 6px;
+  }
+  .blockchain-card.offline .blockchain-card-title { color: var(--text-mid); }
+  .blockchain-card-msg { color: var(--text); margin-bottom: 8px; }
+  .blockchain-thanks {
+    font-size: 13px;
+    font-weight: 600;
+    color: #1e3a5f;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    background: rgba(255,255,255,0.75);
+    border: 1px solid rgba(37,99,235,0.15);
+    margin-bottom: 8px;
+  }
+  .blockchain-card.offline .blockchain-thanks {
+    color: var(--text-mid);
+    border-color: var(--border);
+    background: var(--white);
+  }
+  .blockchain-mode-hint {
+    font-size: 12px;
+    color: var(--text-mid);
+    margin-bottom: 6px;
+  }
+  .blockchain-meta {
+    font-size: 11px;
+    font-family: ui-monospace, monospace;
+    color: var(--text-soft);
+    word-break: break-all;
+  }
+
   /* Stats grid */
   .stats-grid {
     display: grid;
@@ -1121,7 +1176,7 @@
         <div class="step-num">3</div>
         <div class="step-body">
           <strong>Get an instant verdict</strong>
-          <span>Receive a genuine or suspicious result with confidence score and advice</span>
+          <span>Receive a genuine or suspicious result with confidence score and advice; eligible scans are fingerprinted for the MediSecure blockchain</span>
         </div>
       </div>
     </div>
@@ -1188,6 +1243,14 @@
         <span class="preview-size" id="resultImgName" style="font-size:12px; color:var(--text-soft);"></span>
       </div>
       <img id="resultImg" src="" alt="Scanned medicine">
+    </div>
+
+    <div class="blockchain-card" id="blockchainCard" style="display:none;">
+      <div class="blockchain-card-title" id="blockchainCardTitle">MediSecure ledger</div>
+      <div class="blockchain-mode-hint" id="blockchainModeHint"></div>
+      <div class="blockchain-card-msg" id="blockchainCardMsg"></div>
+      <div class="blockchain-thanks" id="blockchainThanks"></div>
+      <div class="blockchain-meta" id="blockchainMeta"></div>
     </div>
 
     <!-- What to do -->
@@ -1424,6 +1487,35 @@
     document.getElementById('advisoryBox').textContent = data.message;
     barcodeMetaCard.style.display = 'none';
 
+    const bcCard = document.getElementById('blockchainCard');
+    if (data.verification_hash) {
+      bcCard.style.display = 'block';
+      const stored = !!data.blockchain_stored;
+      bcCard.className = 'blockchain-card ' + (stored ? 'stored' : 'offline');
+      document.getElementById('blockchainCardTitle').textContent = stored
+        ? 'Recorded on the MediSecure blockchain'
+        : 'Verification fingerprint';
+      const modeHint = document.getElementById('blockchainModeHint');
+      if (data.mode === 'barcode_plus_image') {
+        modeHint.textContent =
+          'Barcode + image: the fingerprint includes both your barcode check and packaging analysis.';
+      } else {
+        modeHint.textContent =
+          'Image scan: the fingerprint reflects your packaging analysis result.';
+      }
+      modeHint.style.display = 'block';
+      document.getElementById('blockchainCardMsg').textContent = data.blockchain_message || '';
+      document.getElementById('blockchainThanks').textContent = data.contributor_thanks || '';
+      let meta = '';
+      if (data.record_id) meta += 'Record: ' + data.record_id;
+      if (data.verification_hash)
+        meta += (meta ? ' · ' : '') + 'SHA-256: ' + data.verification_hash.slice(0, 20) + '…';
+      if (data.blockchain_tx_hash) meta += ' · Tx: ' + data.blockchain_tx_hash;
+      document.getElementById('blockchainMeta').textContent = meta;
+    } else {
+      bcCard.style.display = 'none';
+    }
+
     if (data.mode === 'barcode_plus_image' && data.image_result && data.barcode_result) {
       barcodeMetaCard.style.display = 'block';
       const br = data.barcode_result;
@@ -1533,6 +1625,7 @@
     stepsCard.style.display = 'block';
     barcodeMetaCard.style.display = 'none';
     barcodeMetaContent.innerHTML = '';
+    document.getElementById('blockchainCard').style.display = 'none';
     barcodeValueInput.value = '';
     stopBarcodeScanner();
     document.getElementById('confBar').style.width = '0%';

@@ -13,8 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from predict import MedicineVerifier
 from blockchain_service import (
     create_result_object,
-    generate_verification_hash,
-    store_on_chain,
+    create_verification_record,
+    try_commit_to_chain,
 )
 
 UPLOAD_FOLDER  = "uploads"
@@ -148,6 +148,34 @@ def combine_results(image_result: dict, barcode_result: dict):
         },
     }
 
+
+def _chain_payload_for_predict(result: dict, record_id: str) -> dict:
+    return create_verification_record(
+        record_id=record_id,
+        mode="image_only",
+        label=result["label"],
+        status=result["status"],
+        confidence=result["confidence"],
+        risk_level=result["risk_level"],
+    )
+
+
+def _chain_payload_for_barcode_scan(combined: dict, barcode: str, record_id: str) -> dict:
+    br = combined["barcode_result"]
+    im = combined["image_result"]
+    return create_verification_record(
+        record_id=record_id,
+        mode="barcode_plus_image",
+        label=combined["label"],
+        status=combined["status"],
+        confidence=combined["confidence"],
+        risk_level=combined["risk_level"],
+        barcode=barcode,
+        barcode_status=str(br.get("status", "")),
+        image_status=str(im.get("status", "")),
+    )
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -173,6 +201,10 @@ def predict():
 
     os.remove(filepath)
 
+    record_id = str(uuid.uuid4())
+    chain_record = _chain_payload_for_predict(result, record_id)
+    chain_info = try_commit_to_chain(chain_record)
+
     return jsonify({
         "status":     result["status"],
         "label":      result["label"],
@@ -181,6 +213,7 @@ def predict():
         "raw_score":  result["raw_score"],
         "message":    result["message"],
         "mode": "image_only",
+        **chain_info,
     })
 
 
@@ -219,7 +252,12 @@ def predict_with_barcode():
         return jsonify({"error": str(e)}), 500
 
     os.remove(filepath)
-    return jsonify(combined)
+
+    record_id = str(uuid.uuid4())
+    chain_record = _chain_payload_for_barcode_scan(combined, barcode, record_id)
+    chain_info = try_commit_to_chain(chain_record)
+
+    return jsonify({**combined, **chain_info})
 
 @app.route("/health")
 def health():
@@ -263,24 +301,12 @@ def store_result():
         confidence=confidence,
         risk_level=risk_level,
     )
-    verification_hash = generate_verification_hash(result_obj)
-
-    try:
-        tx_hash = store_on_chain(
-            image_id=result_obj["image_id"],
-            hash_val=verification_hash,
-            risk=result_obj["risk_level"],
-            timestamp=result_obj["timestamp"],
-        )
-    except Exception as e:
-        return jsonify({"error": f"blockchain store failed: {e}"}), 500
-
+    chain_info = try_commit_to_chain(result_obj)
     return jsonify(
         {
-            "blockchain_tx_hash": tx_hash,
-            "verification_hash": verification_hash,
-            "image_id": result_obj["image_id"],
+            **chain_info,
             "timestamp": result_obj["timestamp"],
+            "image_id": chain_info["record_id"],
         }
     )
 
